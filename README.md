@@ -131,9 +131,12 @@ measured from a per-workspace anchor written in the same commit as the finish, s
 deleting a finished task cannot silently cut a pause short, and the status line
 counts the wait down — a queue that has gone quiet should say why.
 
-Like every other setting it is **per workspace**: the value lives in the
-workspace's own settings, so one workspace can pace a batch out while another runs
-straight through, and setting it in one page leaves every other queue alone.
+The interval is **per workspace**: the value lives in the workspace's own
+settings, so one workspace can pace a batch out while another runs straight
+through, and setting it in one page leaves every other queue alone. It is the
+setting most likely to differ between two projects — one repo may be
+rate-limited, another may be a scratch space you want worked through quickly —
+which is why it is the one worth setting by hand per workspace.
 
 It is a gap **between two tasks**, not a delay before the queue may act. A task
 with nothing finished ahead of it in the list opens the run and starts at once,
@@ -151,20 +154,26 @@ Tasks in a workspace share a session by default, so two at once is not
 parallelism — it is the second task queueing behind the first while both count as
 running, which makes the panel lie about what is happening.
 
-### Everything is per workspace
+### What is per workspace
 
-Every setting belongs to a workspace, not to the plugin: its hours, its zone, its
-target mode, its timeout, its compaction switch, and its interval. Two workspaces
-pace on **their own** intervals in the same pass — one waiting out a pause does
-not hold the other back, and editing the value in one page cannot reach the
-other.
+**The execution interval is the per-workspace setting.** It is the one that
+legitimately differs between two projects, so it is the one you set on the page
+for the workspace you are looking at — one repo may be rate-limited, another may
+be a scratch space you want worked through quickly.
 
-That is a property of where the settings live: they are stored under the
-workspace in the durable document, and every mutating route names the *session*
-it came from, which the Host resolves to a workspace. The `config:` block in the
-composition row is only a **seed** for a workspace that has never been seen —
-once a workspace has stored its own value, that value is the truth and the
-composition config cannot overwrite it.
+The other settings — the hours, the zone, the approval bypass, the target mode,
+the timeout, the compaction switch — are meant to be the **same everywhere**, and
+they are configured once in the plugin's `config:` block rather than re-entered per
+repository. A workspace the queue has never seen reads that configuration as it
+stands, so a fresh workspace starts from the shared answer instead of from
+defaults.
+
+Mechanically every setting is stored under its workspace in the durable document,
+and every mutating route names the *session* it came from, which the Host resolves
+to a workspace. That is what keeps the interval honest: editing it in one page
+cannot reach another queue. The same storage is what lets any of the shared values
+differ for one workspace if you change it there — the composition config is the
+source a workspace starts from, not a lock on it.
 
 ### Compacting a shared session
 
@@ -284,7 +293,7 @@ composition config cannot undo hours the user set in the page.
         autoApprove: true
         targetMode: shared       # shared (recommended) | fresh
         taskTimeoutMinutes: 360  # 1..1440
-        cooldownMinutes: 0       # 0..1440, wait between tasks
+        cooldownMinutes: 0       # 0..1440, wait between tasks (per workspace)
         compactBeforeTask: false # compact a shared session before each task
         file: ''                 # empty = <DSH_HOME>/task-queue/queue.json
 ```

@@ -948,8 +948,9 @@ test('the settings draft is seeded once and then owns the form', async () => {
 });
 
 test('the interval field says it is per workspace', async () => {
-	// The setting is stored per workspace, and nothing in the UI used to say so —
-	// which is what made "set it for this workspace" read as a missing feature.
+	// The interval is the setting that differs between projects, and the field has
+	// to say so: it is the one on this face meant to be set per workspace rather
+	// than once for the whole plugin.
 	const { page } = await setup();
 	await click(page(), settingsTab);
 

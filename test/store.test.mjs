@@ -274,8 +274,8 @@ test('mutate hands back the callback result', () => {
 });
 
 test('the execution interval is per workspace, not global', () => {
-	// Each workspace keeps its own hours *and* its own interval: one can pace a
-	// batch out while another runs straight through. The value lives in the
+	// The interval is the setting meant to differ between projects: one workspace
+	// can pace a batch out while another runs straight through. It lives in the
 	// workspace's settings, so setting it in one place cannot reach the other.
 	const fs = memoryFs();
 	const store = new TaskStore({ file: '/q.json', fs });
