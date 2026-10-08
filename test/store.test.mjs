@@ -21,6 +21,7 @@ import {
 	normalizeWorkspaceSettings,
 	TASK_STATUS,
 } from '../host/state.js';
+import { patchSettings } from '../host/queue.js';
 
 /** An in-memory filesystem that records what was written. */
 function memoryFs(initial = {}) {
@@ -270,4 +271,37 @@ test('mutate hands back the callback result', () => {
 	store.load();
 	const result = store.mutate(() => 'the-value');
 	assert.equal(result, 'the-value');
+});
+
+test('the execution interval is per workspace, not global', () => {
+	// Each workspace keeps its own hours *and* its own interval: one can pace a
+	// batch out while another runs straight through. The value lives in the
+	// workspace's settings, so setting it in one place cannot reach the other.
+	const fs = memoryFs();
+	const store = new TaskStore({ file: '/q.json', fs });
+	store.load();
+	store.mutate((state) => {
+		patchSettings(state, 'ws-1', { cooldownMinutes: 30 });
+		patchSettings(state, 'ws-2', { cooldownMinutes: 5 });
+	});
+	assert.equal(store.settingsFor('ws-1').cooldownMinutes, 30);
+	assert.equal(store.settingsFor('ws-2').cooldownMinutes, 5);
+
+	// A workspace never seen reads the seed without being written, and the others
+	// are unaffected by that read.
+	assert.equal(store.settingsFor('ws-3').cooldownMinutes, DEFAULT_WORKSPACE_SETTINGS.cooldownMinutes);
+	assert.equal(store.settingsFor('ws-1').cooldownMinutes, 30, 'still its own value');
+});
+
+test('a per-workspace interval survives a reopen', () => {
+	// It is durable state, not a session preference: the queue has to keep pacing
+	// after the Host restarts.
+	const fs = memoryFs();
+	const first = new TaskStore({ file: '/q.json', fs });
+	first.load();
+	first.mutate((state) => patchSettings(state, 'ws-1', { cooldownMinutes: 45 }));
+
+	const reopened = new TaskStore({ file: '/q.json', fs });
+	reopened.load();
+	assert.equal(reopened.settingsFor('ws-1').cooldownMinutes, 45);
 });

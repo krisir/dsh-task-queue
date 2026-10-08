@@ -2029,7 +2029,8 @@ const zh = {
 	'settings.targetShared': '共用一个会话（推荐）',
 	'settings.targetHint': '共用一个会话时，任务之间可以接续上下文，结果也都在这一个会话里；打开下面的会话压缩可以避免上下文越滚越大。',
 	'settings.cooldown': '执行间隔（分钟）',
-	'settings.cooldownHint': '上一个任务结束后等这么久再开始下一个。0 表示不等待，有空位就接着执行。',
+	'settings.cooldownHint':
+		'上一个任务结束后等这么久再开始下一个。0 表示不等待，有空位就接着执行。只对当前工作区生效，每个工作区各设各的。',
 	'settings.compact': '任务执行前压缩会话',
 	'settings.compactHint':
 		'只在「共用会话 / 固定会话」下有意义：每个任务开始前先把会话压缩成摘要，避免前面任务的上下文越滚越大。每个任务新建会话时不需要，也不会触发。',
@@ -2138,7 +2139,8 @@ const en = {
 	'settings.targetShared': 'One shared session (recommended)',
 	'settings.targetHint': 'A shared session lets the tasks build on each other and keeps every result in one conversation; turn on compaction below to stop that conversation growing without bound.',
 	'settings.cooldown': 'Interval between tasks (minutes)',
-	'settings.cooldownHint': 'Wait this long after one task finishes before starting the next. 0 starts the next one as soon as a slot is free.',
+	'settings.cooldownHint':
+		'Wait this long after one task finishes before starting the next. 0 starts the next one as soon as a slot is free. Per workspace: each one keeps its own interval.',
 	'settings.compact': 'Compact the session before each task',
 	'settings.compactHint':
 		'Only meaningful for a shared or pinned session: compacting keeps each task starting from a summary instead of everything the earlier tasks left behind. A fresh session per task never triggers it.',

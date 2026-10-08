@@ -943,3 +943,19 @@ test('the settings draft is seeded once and then owns the form', async () => {
 
 	assert.equal(cooldown().props.value, 50, 'the second edit built on the first, not on the host value');
 });
+
+test('the interval field says it is per workspace', async () => {
+	// The setting is stored per workspace, and nothing in the UI used to say so —
+	// which is what made "set it for this workspace" read as a missing feature.
+	const { page } = await setup();
+	await click(page(), settingsTab);
+
+	const hints = findAll(page(), (element) => element.props.className === 'tq-hint').map(
+		(element) => element.props.children,
+	);
+	const cooldownHint = hints.find(
+		(text) => typeof text === 'string' && text.startsWith('上一个任务结束后'),
+	);
+	assert.ok(cooldownHint, 'the interval field has its hint');
+	assert.match(cooldownHint, /当前工作区/, 'and it names the scope');
+});

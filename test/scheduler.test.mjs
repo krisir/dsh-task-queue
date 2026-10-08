@@ -17,7 +17,7 @@ import { test } from 'node:test';
 
 import { Scheduler } from '../host/scheduler.js';
 import { TaskStore, TASK_STATUS, normalizeWorkspaceSettings } from '../host/state.js';
-import { archiveCompleted, createTask } from '../host/queue.js';
+import { archiveCompleted, createTask, patchSettings } from '../host/queue.js';
 
 /** 18:00 in Asia/Shanghai, the first minute the window is open. */
 const OPEN = Date.parse('2025-01-01T10:00:00Z');
@@ -407,4 +407,30 @@ test('stopping the loop prevents any further pass', async () => {
 	scheduler.stop();
 	await scheduler.tick();
 	assert.deepEqual(dispatcher.dispatched, []);
+});
+
+test('two workspaces pace on their own intervals in the same pass', async () => {
+	// The point of a per-workspace interval: one workspace waiting out a pause must
+	// not hold another one back. Both are open, both have work and a predecessor,
+	// and only the one with the interval set waits.
+	const store = buildStore([], { cooldownMinutes: 0 });
+	store.mutate((state) => {
+		patchSettings(state, 'ws-paced', { cooldownMinutes: 30 }, store.seedSettings);
+		patchSettings(state, 'ws-free', { cooldownMinutes: 0 }, store.seedSettings);
+
+		for (const workspaceId of ['ws-paced', 'ws-free']) {
+			// A finished task, so the next one is a successor rather than the task
+			// that opens the run.
+			createTask(state, workspaceId, { prompt: 'done in ' + workspaceId }).status = TASK_STATUS.done;
+			state.workspaces[workspaceId].lastFinishedAt = OPEN - 60 * 1000;
+			createTask(state, workspaceId, { prompt: 'next in ' + workspaceId });
+		}
+	});
+	const dispatcher = buildDispatcher(store);
+	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
+
+	await scheduler.tick();
+	assert.deepEqual(dispatcher.dispatched, ['next in ws-free'], 'only the unpaced workspace ran');
+	assert.ok(scheduler.cooldownRemaining('ws-paced') > 0, 'the paced one is still waiting');
+	assert.equal(scheduler.cooldownRemaining('ws-free'), 0, 'and the other has nothing to wait for');
 });

@@ -128,6 +128,10 @@ measured from a per-workspace anchor written in the same commit as the finish, s
 deleting a finished task cannot silently cut a pause short, and the status line
 counts the wait down — a queue that has gone quiet should say why.
 
+Like every other setting it is **per workspace**: the value lives in the
+workspace's own settings, so one workspace can pace a batch out while another runs
+straight through, and setting it in one page leaves every other queue alone.
+
 It is a gap **between two tasks**, not a delay before the queue may act. A task
 with nothing finished ahead of it in the list opens the run and starts at once,
 even when the anchor is still inside the interval — which is the normal case when
@@ -143,6 +147,21 @@ it, exactly as it ignores the window.
 Tasks in a workspace share a session by default, so two at once is not
 parallelism — it is the second task queueing behind the first while both count as
 running, which makes the panel lie about what is happening.
+
+### Everything is per workspace
+
+Every setting belongs to a workspace, not to the plugin: its hours, its zone, its
+target mode, its timeout, its compaction switch, and its interval. Two workspaces
+pace on **their own** intervals in the same pass — one waiting out a pause does
+not hold the other back, and editing the value in one page cannot reach the
+other.
+
+That is a property of where the settings live: they are stored under the
+workspace in the durable document, and every mutating route names the *session*
+it came from, which the Host resolves to a workspace. The `config:` block in the
+composition row is only a **seed** for a workspace that has never been seen —
+once a workspace has stored its own value, that value is the truth and the
+composition config cannot overwrite it.
 
 ### Compacting a shared session
 
@@ -443,7 +462,7 @@ asserts the page installs no pointer-capturing gesture at all.
 
 ```sh
 node build.mjs      # regenerate client.js
-node --test test/   # 176 tests, no dependencies to install
+node --test test/   # 180 tests, no dependencies to install
 ```
 
 The suite covers the window arithmetic (the midnight wrap, the exclusive end
