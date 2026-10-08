@@ -369,31 +369,36 @@ function ArchiveView({ t, sessionId, snapshot }) {
 	return h(
 		React.Fragment,
 		null,
+		// Above the list, matching the queue face's bulk action. It is the same
+		// kind of control — one that acts on everything below it — so it sits in
+		// the same place on both faces rather than moving around between them.
+		archived.length === 0
+			? null
+			: h(
+					'div',
+					{ className: 'tq-row tq-bulk' },
+					armed ? h('span', { className: 'tq-hint' }, t('archive.clearWarning')) : null,
+					h(BulkAction, {
+						t,
+						label: t('archive.clear'),
+						confirmLabel: t('archive.clearConfirm'),
+						count: archived.length,
+						armed,
+						disabled: busy === 'global',
+						onClick: async () => {
+							if (!armed) {
+								uiStore.set({ confirmClearArchive: true });
+								return;
+							}
+							const ok = await mutate(sessionId, 'global', () => api.clearArchived(sessionId));
+							uiStore.set({ confirmClearArchive: false });
+							if (!ok) uiStore.set({ error: t('archive.clearFailed') });
+						},
+					}),
+				),
 		archived.length === 0
 			? h('div', { className: 'tq-empty' }, t('archive.empty'))
 			: archived.map((task) => h(ArchivedCard, { key: task.id, t, sessionId, task })),
-		h(
-			'div',
-			{ className: 'tq-row-end tq-row tq-bulk' },
-			armed ? h('span', { className: 'tq-hint' }, t('archive.clearWarning')) : null,
-			h(BulkAction, {
-				t,
-				label: t('archive.clear'),
-				confirmLabel: t('archive.clearConfirm'),
-				count: archived.length,
-				armed,
-				disabled: busy === 'global',
-				onClick: async () => {
-					if (!armed) {
-						uiStore.set({ confirmClearArchive: true });
-						return;
-					}
-					const ok = await mutate(sessionId, 'global', () => api.clearArchived(sessionId));
-					uiStore.set({ confirmClearArchive: false });
-					if (!ok) uiStore.set({ error: t('archive.clearFailed') });
-				},
-			}),
-		),
 	);
 }
 

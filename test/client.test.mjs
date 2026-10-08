@@ -710,11 +710,14 @@ test('clearing the archive asks first, and only then deletes', async () => {
 	assert.ok(calls.some((call) => call.path === '/tasks/archive/clear'), 'the second click deletes');
 });
 
-test('an empty archive cannot be cleared', async () => {
+test('an empty archive offers no way to clear it', async () => {
 	const { page } = await setup();
 	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '归档'));
-	const clear = findAll(page(), action('清空归档'))[0];
-	assert.equal(clear.props.disabled, true, 'there is nothing to clear');
+	// The button is absent rather than present-and-disabled: a destructive control
+	// that cannot do anything is noise, and the empty-archive note already says
+	// there is nothing here. Same rule as the queue face's bulk action.
+	assert.equal(findAll(page(), action('清空归档')).length, 0, 'there is nothing to clear');
+	assert.ok(render(page()).texts.includes('归档是空的。已完成的任务归档后会留在这里。'), 'and the page says so');
 });
 
 test('the settings offer exactly two execution places, shared by default', async () => {
@@ -958,4 +961,48 @@ test('the interval field says it is per workspace', async () => {
 	);
 	assert.ok(cooldownHint, 'the interval field has its hint');
 	assert.match(cooldownHint, /当前工作区/, 'and it names the scope');
+});
+
+test('the clear-archive button sits above the archived list too', async () => {
+	// The same rule as the queue face's bulk action, so the two faces put their
+	// one bulk control in the same place instead of it jumping between them.
+	const state = snapshot();
+	state.archived = [
+		{ id: 'old-1', prompt: '归档的旧任务', status: 'done', createdAt: 1, finishedAt: 2 },
+		{ id: 'old-2', prompt: '另一个', status: 'done', createdAt: 3, finishedAt: 4 },
+	];
+	const { page } = await setup(state);
+	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '归档'));
+	const elements = render(page()).elements;
+
+	const button = elements.findIndex((element) => action('清空归档')(element));
+	const firstCard = elements.findIndex((element) =>
+		String(element.props.className ?? '')
+			.split(' ')
+			.includes('tq-card'),
+	);
+
+	assert.ok(button !== -1, 'the clear control is on the archive face');
+	assert.ok(firstCard !== -1, 'and there is a list of cards below it');
+	assert.ok(button < firstCard, 'the control comes before the first archived card');
+});
+
+test('both faces put their bulk control in the same place', async () => {
+	// A control that moves between faces is a control you have to re-find.
+	const state = snapshot();
+	state.archived = [{ id: 'old-1', prompt: '归档的旧任务', status: 'done', createdAt: 1, finishedAt: 2 }];
+	const { page } = await setup(state);
+
+	const bulkRow = () => {
+		const row = findAll(page(), (element) =>
+			String(element.props.className ?? '')
+				.split(' ')
+				.includes('tq-bulk'),
+		)[0];
+		return row;
+	};
+
+	assert.ok(bulkRow(), 'the queue face has a bulk row');
+	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '归档'));
+	assert.ok(bulkRow(), 'and so does the archive face');
 });

@@ -765,10 +765,9 @@ const STYLES = `
 .tq-toggle input { margin: 2px 0 0; flex: 0 0 auto; }
 .tq-toggle-text { display: flex; flex-direction: column; gap: 1px; }
 
-/* Bulk actions are kept clear of whatever sits beside them: a destructive one
-   should not be flush against a card's own controls. The queue face puts this
-   row above its list, the archive face below — the shared margin is the gap,
-   and each face supplies its own separation. */
+/* Bulk actions sit above the list on both faces, and the gap below them is what
+   keeps a destructive one clear of the first card's own controls — which is the
+   one thing that must not be next to 清空归档. */
 .tq-bulk { margin-top: 4px; }
 
 .tq-btn-armed {
@@ -1680,31 +1679,36 @@ function ArchiveView({ t, sessionId, snapshot }) {
 	return h(
 		React.Fragment,
 		null,
+		// Above the list, matching the queue face's bulk action. It is the same
+		// kind of control — one that acts on everything below it — so it sits in
+		// the same place on both faces rather than moving around between them.
+		archived.length === 0
+			? null
+			: h(
+					'div',
+					{ className: 'tq-row tq-bulk' },
+					armed ? h('span', { className: 'tq-hint' }, t('archive.clearWarning')) : null,
+					h(BulkAction, {
+						t,
+						label: t('archive.clear'),
+						confirmLabel: t('archive.clearConfirm'),
+						count: archived.length,
+						armed,
+						disabled: busy === 'global',
+						onClick: async () => {
+							if (!armed) {
+								uiStore.set({ confirmClearArchive: true });
+								return;
+							}
+							const ok = await mutate(sessionId, 'global', () => api.clearArchived(sessionId));
+							uiStore.set({ confirmClearArchive: false });
+							if (!ok) uiStore.set({ error: t('archive.clearFailed') });
+						},
+					}),
+				),
 		archived.length === 0
 			? h('div', { className: 'tq-empty' }, t('archive.empty'))
 			: archived.map((task) => h(ArchivedCard, { key: task.id, t, sessionId, task })),
-		h(
-			'div',
-			{ className: 'tq-row-end tq-row tq-bulk' },
-			armed ? h('span', { className: 'tq-hint' }, t('archive.clearWarning')) : null,
-			h(BulkAction, {
-				t,
-				label: t('archive.clear'),
-				confirmLabel: t('archive.clearConfirm'),
-				count: archived.length,
-				armed,
-				disabled: busy === 'global',
-				onClick: async () => {
-					if (!armed) {
-						uiStore.set({ confirmClearArchive: true });
-						return;
-					}
-					const ok = await mutate(sessionId, 'global', () => api.clearArchived(sessionId));
-					uiStore.set({ confirmClearArchive: false });
-					if (!ok) uiStore.set({ error: t('archive.clearFailed') });
-				},
-			}),
-		),
 	);
 }
 

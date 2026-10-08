@@ -379,10 +379,9 @@ const STYLES = `
 .tq-toggle input { margin: 2px 0 0; flex: 0 0 auto; }
 .tq-toggle-text { display: flex; flex-direction: column; gap: 1px; }
 
-/* Bulk actions are kept clear of whatever sits beside them: a destructive one
-   should not be flush against a card's own controls. The queue face puts this
-   row above its list, the archive face below — the shared margin is the gap,
-   and each face supplies its own separation. */
+/* Bulk actions sit above the list on both faces, and the gap below them is what
+   keeps a destructive one clear of the first card's own controls — which is the
+   one thing that must not be next to 清空归档. */
 .tq-bulk { margin-top: 4px; }
 
 .tq-btn-armed {
