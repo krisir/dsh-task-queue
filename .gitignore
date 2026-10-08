@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Local queue data (never generated inside the package, but seen when the
+# plugin is checked out into a DSH profile directory)
+queue.json
+
+# Editor / OS noise
+.DS_Store
+*.log
+*.swp
+.idea/
+.vscode/

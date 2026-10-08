@@ -1,0 +1,24 @@
+# Bundle patch for dsh-plugin-task-queue.
+#
+# Inserting the row is all that is needed: the package's own `apply` starts the
+# scheduler and the control routes, and the browser half is discovered through
+# `dsh.client` in package.json.
+#
+# Composition config is a *seed* only — it is written into a workspace's settings
+# the first time that workspace is seen. After that the queue the page edits is
+# the truth, so uncommenting these later will not undo hours the user has set.
+- insert:
+    - id: task-queue
+      name: 'dsh-plugin-task-queue'
+      # config:
+      #   enabled: true
+      #   windows:
+      #     - { start: '18:00', end: '07:00' }
+      #     - { start: '12:00', end: '13:00' }
+      #   timeZone: 'Asia/Shanghai'
+      #   autoApprove: true
+      #   targetMode: shared         # shared (recommended) | fresh
+      #   taskTimeoutMinutes: 360
+      #   cooldownMinutes: 0         # wait between tasks
+      #   compactBeforeTask: false   # compact a shared session before each task
+      #   file: ''                   # empty = <DSH_HOME>/task-queue/queue.json

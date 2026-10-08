@@ -1,0 +1,57 @@
+{
+  "name": "dsh-plugin-task-queue",
+  "version": "1.0.0",
+  "description": "A time-gated task queue for DeepSeek Harness: stack up task cards by day, and let the queue claim and run them unattended inside a window like 18:00–07:00.",
+  "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "task-queue",
+    "scheduler",
+    "unattended"
+  ],
+  "main": "./index.js",
+  "exports": {
+    ".": {
+      "default": "./index.js"
+    },
+    "./client": {
+      "default": "./client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "install.mjs",
+    "build.mjs",
+    "host/",
+    "src/"
+  ],
+  "scripts": {
+    "build": "node build.mjs",
+    "install-plugin": "node install.mjs install",
+    "test": "node build.mjs && node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-layout"
+      ]
+    }
+  }
+}
