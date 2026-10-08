@@ -195,6 +195,10 @@ function SettingsView({ t, snapshot, values, set }) {
 	return h(
 		'div',
 		{ className: 'tq-settings' },
+		// Which of these belong to the workspace and which are shared is the first
+		// thing the form has to say: every field looks alike, and guessing wrong
+		// means expecting a change to affect one queue when it affects all of them.
+		h('div', { className: 'tq-scope-note' }, t('settings.sharedNote')),
 		h(
 			'div',
 			{ className: 'tq-settings-group' },
@@ -322,6 +326,9 @@ function SettingsView({ t, snapshot, values, set }) {
 					h('span', { className: 'tq-hint' }, t('settings.compactHint')),
 				),
 			),
+			// The one per-workspace setting, marked off from the shared ones above it
+			// so the page says which is which rather than leaving it to be guessed.
+			h('div', { className: 'tq-scope-note' }, t('settings.perWorkspaceNote')),
 			h(
 				'div',
 				{ className: 'tq-field' },

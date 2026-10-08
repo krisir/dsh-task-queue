@@ -99,6 +99,8 @@ const zh = {
 
 	'settings.windowGroup': '执行时段',
 	'settings.windowGroupHint': '可以有多个时段，任意一个到点都会开始执行。开始时间晚于结束时间表示跨到第二天。',
+	'settings.sharedNote': '上面这些设置对所有工作区生效，是整套队列共用的。',
+	'settings.perWorkspaceNote': '下面这一项按工作区分别设置，只影响当前工作区。',
 	'settings.windowStart': '第 {index} 个时段的开始时间',
 	'settings.windowEnd': '第 {index} 个时段的结束时间',
 	'settings.addWindow': '添加时段',
@@ -209,6 +211,8 @@ const en = {
 
 	'settings.windowGroup': 'Execution windows',
 	'settings.windowGroupHint': 'Add as many as you like; the queue runs when any one of them is open. A start later than the end wraps to the next day.',
+	'settings.sharedNote': 'The settings above apply to every workspace — they are shared by the whole queue.',
+	'settings.perWorkspaceNote': 'The one below is set per workspace and affects only this one.',
 	'settings.windowStart': 'Start time of window {index}',
 	'settings.windowEnd': 'End time of window {index}',
 	'settings.addWindow': 'Add window',

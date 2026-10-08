@@ -162,18 +162,28 @@ for the workspace you are looking at — one repo may be rate-limited, another m
 be a scratch space you want worked through quickly.
 
 The other settings — the hours, the zone, the approval bypass, the target mode,
-the timeout, the compaction switch — are meant to be the **same everywhere**, and
-they are configured once in the plugin's `config:` block rather than re-entered per
-repository. A workspace the queue has never seen reads that configuration as it
-stands, so a fresh workspace starts from the shared answer instead of from
-defaults.
+the timeout, the compaction switch — are the **plugin's**. They are stored once,
+they apply to every workspace, and changing them from any workspace's page changes
+the queue as a whole. They are set in the `config:` block, or on the page, and
+either way there is one answer rather than one per repository to keep in sync.
 
-Mechanically every setting is stored under its workspace in the durable document,
-and every mutating route names the *session* it came from, which the Host resolves
-to a workspace. That is what keeps the interval honest: editing it in one page
-cannot reach another queue. The same storage is what lets any of the shared values
-differ for one workspace if you change it there — the composition config is the
-source a workspace starts from, not a lock on it.
+This is enforced by where the values live, not by convention. The document has a
+single `settings` object for the shared half and a small entry per workspace
+holding only its interval:
+
+```jsonc
+{
+  "version": 3,
+  "settings": { "windows": [ … ], "timeZone": "Asia/Shanghai", … },
+  "workspaces": { "<workspaceId>": { "settings": { "cooldownMinutes": 30 } } },
+  "tasks": [ … ]
+}
+```
+
+So a workspace has nowhere to put its own hours, and two queues cannot drift
+apart on when they run. `settingsFor(workspaceId)` joins the two halves into the
+one flat object every caller reads, which is why the rest of the code never has
+to know which half a field came from.
 
 ### Compacting a shared session
 
@@ -276,9 +286,11 @@ is worth leaving on only when you mean it.
 
 ## Configuration
 
-The `config:` block in the inserted row is a **seed**, applied to a workspace the
-first time it is seen. After that the durable document is the truth, so a
-composition config cannot undo hours the user set in the page.
+The `config:` block in the inserted row is the **plugin's settings** — the shared
+half. It seeds a document that does not exist yet; once the document holds its own
+settings, those are the truth, so a composition config cannot undo an edit the
+user made in the page. The interval is not in this block: it is the per-workspace
+setting and is set on the page.
 
 ```yaml
 - insert:
@@ -293,10 +305,13 @@ composition config cannot undo hours the user set in the page.
         autoApprove: true
         targetMode: shared       # shared (recommended) | fresh
         taskTimeoutMinutes: 360  # 1..1440
-        cooldownMinutes: 0       # 0..1440, wait between tasks (per workspace)
         compactBeforeTask: false # compact a shared session before each task
         file: ''                 # empty = <DSH_HOME>/task-queue/queue.json
 ```
+
+`cooldownMinutes` is deliberately absent: it is the one setting a workspace owns,
+so it is set on the page for the workspace it applies to rather than once for the
+whole queue.
 
 An invalid value in the *page* is dropped rather than repaired against the
 defaults, so one mistyped field never resets the fields around it. A window
@@ -310,7 +325,7 @@ independent intervals. Sending an empty list is therefore a real instruction.
 index.js              re-exports name/inject/Config/apply
 host/
   window.js           pure window arithmetic: isOpen, nextBoundary, zone reads
-  state.js            the durable v2 document, repair, and the v1 migration
+  state.js            the durable v3 document, repair, and the older migrations
   queue.js            queue verbs, all scoped by workspace, plus archiving
   scheduler.js        the claim loop: one pass, workspace by workspace
   dispatch.js         session resolution, prompt delivery, completion tracking
@@ -326,8 +341,11 @@ test/                 window, store, queue, scheduler, privilege, dispatch,
 
 ```jsonc
 {
-  "version": 2,
-  "workspaces": { "<workspaceId>": { "settings": { "windows": [ … ], … } } },
+  "version": 3,
+  // The plugin's settings: hours, zone, approval, target mode, timeout, compaction.
+  "settings": { "windows": [ … ], "timeZone": "Asia/Shanghai", … },
+  // Only the interval is a workspace's own.
+  "workspaces": { "<workspaceId>": { "settings": { "cooldownMinutes": 30 } } },
   "tasks": [
     { "id": "…", "workspaceId": "<workspaceId>", "status": "queued", "archivedAt": 0 }
   ]
@@ -343,12 +361,19 @@ few hundred entries.
 observed state, not configuration: it is what the execution interval measures
 from, and only the dispatcher writes it.
 
-A document written before tasks carried a workspace is **migrated, not
-discarded**: its hours become the seed every workspace starts from *and* are
-written onto the workspace the old settings named, and its tasks are kept under
-an *unassigned* bucket where they still run. The page reports them and offers to
-adopt them into the workspace you are looking at — guessing which workspace they
-belonged to would have been worse than saying plainly that they belong to none.
+Older documents are **migrated, not discarded**. A v1 document kept one settings
+object and a flat task list: its settings are what this version wants anyway, so
+they become the shared settings, and its tasks are kept under an *unassigned*
+bucket where they still run. The page reports them and offers to adopt them into
+the workspace you are looking at — guessing which workspace they belonged to
+would have been worse than saying plainly that they belong to none.
+
+A v2 document kept a **full copy of every setting against each workspace**. The
+shared fields have to be lifted into one place, and they may disagree across
+workspaces — so the migration takes the value the most workspaces already used,
+preferring the first workspace on a tie, which keeps the hours the queue was
+mostly running on rather than an arbitrary one. Every workspace keeps its own
+interval, because that is the field that stays per workspace.
 
 ### Why the halves talk over HTTP
 
@@ -474,7 +499,7 @@ asserts the page installs no pointer-capturing gesture at all.
 
 ```sh
 node build.mjs      # regenerate client.js
-node --test test/   # 182 tests, no dependencies to install
+node --test test/   # 189 tests, no dependencies to install
 ```
 
 The suite covers the window arithmetic (the midnight wrap, the exclusive end

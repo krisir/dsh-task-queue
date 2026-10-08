@@ -736,6 +736,16 @@ const STYLES = `
 }
 
 .tq-settings { display: flex; flex-direction: column; gap: 14px; }
+/* Says which settings are shared and which belong to this workspace. A quiet
+   rule above it separates the note from the field it introduces without making
+   either look like an error. */
+.tq-scope-note {
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--dsw-alias-text-secondary, #94a3b8);
+	padding-top: 10px;
+	border-top: 1px solid var(--dsw-alias-border-secondary, rgba(148, 163, 184, 0.22));
+}
 .tq-settings-group {
 	display: flex;
 	flex-direction: column;
@@ -1505,6 +1515,10 @@ function SettingsView({ t, snapshot, values, set }) {
 	return h(
 		'div',
 		{ className: 'tq-settings' },
+		// Which of these belong to the workspace and which are shared is the first
+		// thing the form has to say: every field looks alike, and guessing wrong
+		// means expecting a change to affect one queue when it affects all of them.
+		h('div', { className: 'tq-scope-note' }, t('settings.sharedNote')),
 		h(
 			'div',
 			{ className: 'tq-settings-group' },
@@ -1632,6 +1646,9 @@ function SettingsView({ t, snapshot, values, set }) {
 					h('span', { className: 'tq-hint' }, t('settings.compactHint')),
 				),
 			),
+			// The one per-workspace setting, marked off from the shared ones above it
+			// so the page says which is which rather than leaving it to be guessed.
+			h('div', { className: 'tq-scope-note' }, t('settings.perWorkspaceNote')),
 			h(
 				'div',
 				{ className: 'tq-field' },
@@ -2012,6 +2029,8 @@ const zh = {
 
 	'settings.windowGroup': '执行时段',
 	'settings.windowGroupHint': '可以有多个时段，任意一个到点都会开始执行。开始时间晚于结束时间表示跨到第二天。',
+	'settings.sharedNote': '上面这些设置对所有工作区生效，是整套队列共用的。',
+	'settings.perWorkspaceNote': '下面这一项按工作区分别设置，只影响当前工作区。',
 	'settings.windowStart': '第 {index} 个时段的开始时间',
 	'settings.windowEnd': '第 {index} 个时段的结束时间',
 	'settings.addWindow': '添加时段',
@@ -2122,6 +2141,8 @@ const en = {
 
 	'settings.windowGroup': 'Execution windows',
 	'settings.windowGroupHint': 'Add as many as you like; the queue runs when any one of them is open. A start later than the end wraps to the next day.',
+	'settings.sharedNote': 'The settings above apply to every workspace — they are shared by the whole queue.',
+	'settings.perWorkspaceNote': 'The one below is set per workspace and affects only this one.',
 	'settings.windowStart': 'Start time of window {index}',
 	'settings.windowEnd': 'End time of window {index}',
 	'settings.addWindow': 'Add window',

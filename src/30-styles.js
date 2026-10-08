@@ -350,6 +350,16 @@ const STYLES = `
 }
 
 .tq-settings { display: flex; flex-direction: column; gap: 14px; }
+/* Says which settings are shared and which belong to this workspace. A quiet
+   rule above it separates the note from the field it introduces without making
+   either look like an error. */
+.tq-scope-note {
+	font-size: 12px;
+	line-height: 1.5;
+	color: var(--dsw-alias-text-secondary, #94a3b8);
+	padding-top: 10px;
+	border-top: 1px solid var(--dsw-alias-border-secondary, rgba(148, 163, 184, 0.22));
+}
 .tq-settings-group {
 	display: flex;
 	flex-direction: column;

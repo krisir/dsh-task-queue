@@ -18,7 +18,9 @@ import { randomUUID } from 'node:crypto';
 import {
 	TASK_STATUS,
 	UNASSIGNED,
+	normalizeGlobalSettings,
 	normalizeWorkspaceSettings,
+	sanitizeGlobalSettingsPatch,
 	sanitizeWorkspaceSettingsPatch,
 } from './state.js';
 
@@ -293,11 +295,27 @@ export function settledCount(state, workspaceId) {
  * @returns {object} the normalized settings.
  */
 export function patchSettings(state, workspaceId, patch, seed) {
+	// The plugin-wide fields are written once, in one place, whatever workspace
+	// the request named — that is what makes them global. Sending them from any
+	// workspace's settings face is a change to the queue as a whole.
+	const global = sanitizeGlobalSettingsPatch(patch);
+	if (Object.keys(global).length > 0) {
+		const base = state.settings ?? normalizeGlobalSettings(seed);
+		state.settings = normalizeGlobalSettings({ ...base, ...global });
+	}
+
+	// The interval belongs to the workspace that asked for it.
+	const own = sanitizeWorkspaceSettingsPatch(patch);
 	const existing = state.workspaces[workspaceId]?.settings;
-	const base = existing ?? normalizeWorkspaceSettings({ ...seed });
-	const merged = { ...base, ...sanitizeWorkspaceSettingsPatch(patch) };
-	state.workspaces[workspaceId] = { settings: normalizeWorkspaceSettings(merged) };
-	return state.workspaces[workspaceId].settings;
+	const base = existing ?? normalizeWorkspaceSettings({});
+	state.workspaces[workspaceId] = {
+		...state.workspaces[workspaceId],
+		settings: normalizeWorkspaceSettings({ ...base, ...own }),
+	};
+	return {
+		...normalizeGlobalSettings(state.settings),
+		...state.workspaces[workspaceId].settings,
+	};
 }
 
 /**
@@ -313,11 +331,14 @@ export function patchSettings(state, workspaceId, patch, seed) {
  * @param {object} seed - the settings a never-seen workspace starts from.
  * @returns {void}
  */
-export function markWorkspaceFinished(state, workspaceId, at, seed) {
+export function markWorkspaceFinished(state, workspaceId, at) {
 	const entry = state.workspaces[workspaceId];
 	if (entry === undefined) {
+		// A workspace can finish a task before anyone has ever set its interval, so
+		// the entry starts at the default rather than carrying a copy of anything
+		// that belongs to the plugin.
 		state.workspaces[workspaceId] = {
-			settings: normalizeWorkspaceSettings({ ...seed }),
+			settings: normalizeWorkspaceSettings({}),
 			lastFinishedAt: at,
 		};
 		return;

@@ -16,7 +16,7 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 
 import { Scheduler } from '../host/scheduler.js';
-import { TaskStore, TASK_STATUS, normalizeWorkspaceSettings } from '../host/state.js';
+import { TaskStore, TASK_STATUS, normalizeGlobalSettings, normalizeWorkspaceSettings } from '../host/state.js';
 import { archiveCompleted, createTask, patchSettings } from '../host/queue.js';
 
 /** 18:00 in Asia/Shanghai, the first minute the window is open. */
@@ -57,12 +57,58 @@ function buildStore(prompts, overrides = {}) {
 	});
 	store.load();
 	store.mutate((state) => {
-		// Settings live per workspace now, so the fixture writes the workspace the
-		// tasks belong to rather than a global object.
+		// The shared settings are the plugin's, so an override lands in the one
+		// global object; the interval is the workspace's and stays in its entry.
+		state.settings = normalizeGlobalSettings({ ...state.settings, ...overrides });
 		state.workspaces[WS] = { settings: normalizeWorkspaceSettings(overrides) };
 		for (const prompt of prompts) createTask(state, WS, { prompt });
 	});
 	return store;
+}
+
+/**
+ * A store with two workspaces that each hold one queued task.
+ *
+ * `settings` is applied to the plugin-wide settings — the hours a test wants to
+ * gate on. `stale` writes a full settings object straight into one workspace's
+ * entry, which is the shape a v2 document had, so a test can prove that only the
+ * interval survives from it.
+ */
+function buildTwoWorkspaces({ settings = {}, stale } = {}) {
+	const files = new Map();
+	const store = new TaskStore({
+		file: '/q.json',
+		fs: {
+			mkdirSync() {},
+			readFileSync(path) {
+				if (!files.has(path)) {
+					const error = new Error('ENOENT');
+					error.code = 'ENOENT';
+					throw error;
+				}
+				return files.get(path);
+			},
+			writeFileSync(path, text) {
+				files.set(path, text);
+			},
+			renameSync(from, to) {
+				files.set(to, files.get(from));
+				files.delete(from);
+			},
+		},
+	});
+	store.load();
+	store.mutate((state) => {
+		state.settings = normalizeGlobalSettings({ ...state.settings, ...settings });
+		state.workspaces.one = { settings: normalizeWorkspaceSettings({}) };
+		state.workspaces.two = { settings: normalizeWorkspaceSettings({}) };
+		if (stale !== undefined) state.workspaces.two.settings = { ...stale };
+		createTask(state, 'one', { prompt: 'work' });
+		createTask(state, 'two', { prompt: 'night work' });
+	});
+	const dispatcher = buildDispatcher(store);
+	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
+	return { store, scheduler, dispatcher };
 }
 
 /** A dispatcher that records calls and marks each task running, like the real one. */
@@ -213,49 +259,42 @@ test('a settings change is picked up by the next pass without a restart', async 
 	assert.deepEqual(dispatcher.dispatched, []);
 	// The user moves the window to include right now.
 	store.mutate((state) => {
-		state.workspaces[WS].settings.windows = [{ start: '00:00', end: '00:00' }];
+		state.settings = normalizeGlobalSettings({ ...state.settings, windows: [{ start: '00:00', end: '00:00' }] });
 	});
 	await scheduler.tick();
 	assert.deepEqual(dispatcher.dispatched, ['first']);
 });
 
-test('each workspace is gated by its own hours', async () => {
-	// The same instant is inside one workspace's window and outside the other's.
-	const files = new Map();
-	const store = new TaskStore({
-		file: '/q.json',
-		fs: {
-			mkdirSync() {},
-			readFileSync(path) {
-				if (!files.has(path)) {
-					const error = new Error('ENOENT');
-					error.code = 'ENOENT';
-					throw error;
-				}
-				return files.get(path);
-			},
-			writeFileSync(path, text) {
-				files.set(path, text);
-			},
-			renameSync(from, to) {
-				files.set(to, files.get(from));
-				files.delete(from);
-			},
-		},
+test('the hours are shared, so both workspaces are gated by the same window', async () => {
+	// Hours are the plugin's, not a workspace's: one answer applies to every
+	// queue, so there is no way for two workspaces to disagree about when the
+	// queue runs. The interval is what differs per workspace, and that is the
+	// next test.
+	const { store, scheduler, dispatcher } = buildTwoWorkspaces({
+		settings: { windows: [{ start: '18:00', end: '07:00' }] },
 	});
-	store.load();
-	store.mutate((state) => {
-		// 17:59 local — closed for day (09:00–17:00) but open for night (18:00–07:00)
-		// once the clock is 18:00; at OPEN exactly, the night one is open.
-		state.workspaces.day = { settings: normalizeWorkspaceSettings({ windows: [{ start: '09:00', end: '17:00' }] }) };
-		state.workspaces.night = { settings: normalizeWorkspaceSettings({ windows: [{ start: '18:00', end: '07:00' }] }) };
-		createTask(state, 'day', { prompt: 'day work' });
-		createTask(state, 'night', { prompt: 'night work' });
-	});
-	const dispatcher = buildDispatcher(store);
-	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
 	await scheduler.tick();
-	assert.deepEqual(dispatcher.dispatched, ['night work'], 'only the workspace whose window is open is claimed');
+	assert.deepEqual(dispatcher.dispatched.sort(), ['night work', 'work'], 'both run inside the one window');
+	assert.equal(store.settingsFor('one').windows[0].start, '18:00');
+	assert.equal(store.settingsFor('two').windows[0].start, '18:00', 'and they cannot differ');
+});
+
+test('the hours are shared even when a workspace entry carries a stale copy', async () => {
+	// A v2 document kept a full settings copy per workspace. Only the interval
+	// survives that; a stale window list in a workspace entry must not be able to
+	// gate that workspace on its own hours again.
+	const { store, scheduler, dispatcher } = buildTwoWorkspaces({
+		settings: { windows: [{ start: '09:00', end: '17:00' }] },
+		stale: { windows: [{ start: '18:00', end: '07:00' }] },
+	});
+	await scheduler.tick();
+	assert.deepEqual(dispatcher.dispatched, [], 'the global hours decide, not the stale copy');
+	await scheduler.tick();
+	assert.deepEqual(
+		store.settingsFor('one').windows,
+		[{ start: '09:00', end: '17:00' }],
+		'and the workspace reads the global hours',
+	);
 });
 
 test('a workspace with several windows runs in any of them', async () => {

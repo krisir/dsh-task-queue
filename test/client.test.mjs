@@ -24,7 +24,7 @@ import { runInNewContext } from 'node:vm';
 
 // The Host's own field list, so the browser half's payload can be checked against
 // the thing that actually has to accept it rather than against a copy of it.
-import { DEFAULT_WORKSPACE_SETTINGS } from '../host/state.js';
+import { DEFAULT_SETTINGS } from '../host/state.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const bundle = readFileSync(join(here, '..', 'client.js'), 'utf8');
@@ -754,7 +754,9 @@ test('the settings form sends exactly the fields the host knows', async () => {
 	await click(page(), (element) => saveButton(element) && element.props.disabled === false);
 
 	const posted = JSON.parse(calls.find((call) => call.path === '/settings').body);
-	const known = new Set([...Object.keys(DEFAULT_WORKSPACE_SETTINGS), 'sessionId']);
+	// Every field the form shows, from whichever half of the model it lives in:
+	// the plugin-wide settings and the one setting a workspace owns.
+	const known = new Set([...Object.keys(DEFAULT_SETTINGS), 'sessionId']);
 	const unknown = Object.keys(posted).filter((key) => !known.has(key));
 	assert.deepEqual(unknown, [], 'the form must not invent a setting the host will drop');
 	assert.ok('compactBeforeTask' in posted && 'cooldownMinutes' in posted, 'and must send the ones it shows');
@@ -1006,4 +1008,24 @@ test('both faces put their bulk control in the same place', async () => {
 	assert.ok(bulkRow(), 'the queue face has a bulk row');
 	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '归档'));
 	assert.ok(bulkRow(), 'and so does the archive face');
+});
+
+test('the settings face says which settings are shared and which is per workspace', async () => {
+	// Every field on this face looks alike, so the page has to say which ones
+	// follow the workspace and which are the whole queue's. Without it, a user
+	// changing the hours here reasonably expects only their own queue to move.
+	const { page } = await setup();
+	await click(page(), settingsTab);
+	const notes = findAll(page(), (element) => element.props.className === 'tq-scope-note').map(
+		(element) => element.props.children,
+	);
+
+	assert.ok(
+		notes.some((text) => typeof text === 'string' && text.includes('对所有工作区生效')),
+		'the shared settings are labelled as shared',
+	);
+	assert.ok(
+		notes.some((text) => typeof text === 'string' && text.includes('按工作区分别设置')),
+		'and the per-workspace one is labelled as such',
+	);
 });

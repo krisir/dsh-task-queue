@@ -18,7 +18,7 @@
 import { Scheduler } from './scheduler.js';
 import { Dispatcher } from './dispatch.js';
 import { Privileges } from './privilege.js';
-import { TaskStore, normalizeWorkspaceSettings, defaultFilePath } from './state.js';
+import { TaskStore, normalizeGlobalSettings, defaultFilePath } from './state.js';
 import { createHandler, ROUTE_PREFIX } from './http.js';
 
 /** The Cordis plugin name, which also names the loader row. */
@@ -64,13 +64,16 @@ export const Config = {
 		vendor: 'dsh-task-queue',
 		/**
 		 * @param {unknown} value - the raw composition config.
-		 * @returns {{ value: object }} the normalized seed settings.
+		 * @returns {{ value: object }} the normalized plugin settings.
 		 */
 		validate(value) {
 			const raw = value !== null && typeof value === 'object' ? value : {};
 			return {
 				value: {
-					...normalizeWorkspaceSettings(raw),
+					// The composition config is the plugin's settings, so it is the
+					// global half that is normalized here. The interval is the one
+					// per-workspace setting and is set on the page, not in this block.
+					...normalizeGlobalSettings(raw),
 					file: typeof raw.file === 'string' ? raw.file.trim() : '',
 				},
 			};

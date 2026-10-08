@@ -12,7 +12,13 @@ import { test } from 'node:test';
 
 import { Dispatcher, lastAssistantText, renderPrompt } from '../host/dispatch.js';
 import { Privileges } from '../host/privilege.js';
-import { TaskStore, TASK_STATUS, normalizeWorkspaceSettings, UNASSIGNED } from '../host/state.js';
+import {
+	TaskStore,
+	TASK_STATUS,
+	normalizeGlobalSettings,
+	normalizeWorkspaceSettings,
+	UNASSIGNED,
+} from '../host/state.js';
 import { createTask } from '../host/queue.js';
 
 /** A session stub with a readable log. */
@@ -153,11 +159,13 @@ function build(overrides = {}) {
 		now: () => 1000,
 	});
 	dispatcher.install();
-	const taskSettings = normalizeWorkspaceSettings(overrides);
-	// The store is the authority for the runner id, so the fixture has to put the
-	// settings where `dispatch` actually reads them.
+	const taskSettings = normalizeGlobalSettings(overrides);
+	// The shared settings are the plugin's, so the fixture writes them to the
+	// document's one settings object — which is where `dispatch` reads them from.
+	// The workspace entry keeps the interval.
 	store.mutate((state) => {
-		state.workspaces[WS] = { settings: taskSettings };
+		state.settings = normalizeGlobalSettings({ ...state.settings, ...overrides });
+		state.workspaces[WS] = { settings: normalizeWorkspaceSettings(overrides) };
 	});
 	return { ctx, store, privileges, dispatcher, taskSettings };
 }
@@ -324,9 +332,9 @@ test('fresh mode gives every task its own session', async () => {
 test('an unknown target mode is normalized to the shared runner', async () => {
 	// The document is repaired rather than trusted, so a mode this build does not
 	// know — including the retired pinned mode — falls back instead of failing.
-	assert.equal(normalizeWorkspaceSettings({ targetMode: 'fixed' }).targetMode, 'shared');
-	assert.equal(normalizeWorkspaceSettings({ targetMode: 'nonsense' }).targetMode, 'shared');
-	assert.equal(normalizeWorkspaceSettings({ targetMode: 'fresh' }).targetMode, 'fresh');
+	assert.equal(normalizeGlobalSettings({ targetMode: 'fixed' }).targetMode, 'shared');
+	assert.equal(normalizeGlobalSettings({ targetMode: 'nonsense' }).targetMode, 'shared');
+	assert.equal(normalizeGlobalSettings({ targetMode: 'fresh' }).targetMode, 'fresh');
 });
 
 test('a session shared by tasks is compacted before each task, when asked', async () => {

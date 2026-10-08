@@ -37,7 +37,7 @@ import {
 	updateTask,
 } from './queue.js';
 import { runTaskNow } from './scheduler.js';
-import { TASK_STATUS, UNASSIGNED } from './state.js';
+import { DOCUMENT_VERSION, TASK_STATUS, UNASSIGNED } from './state.js';
 
 /** The route prefix this plugin owns exclusively. */
 export const ROUTE_PREFIX = '/dsh-task-queue/api';
@@ -194,7 +194,7 @@ export function createHandler({ store, scheduler, dispatcher, privileges, resolv
 
 	/** The full snapshot the page renders from. */
 	const snapshot = (workspace) => ({
-		version: 2,
+		version: DOCUMENT_VERSION,
 		now: Date.now(),
 		workspace,
 		settings: workspace === null ? null : { ...settingsOf(workspace.id) },

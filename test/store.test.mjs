@@ -12,12 +12,14 @@ import { test } from 'node:test';
 
 import {
 	DOCUMENT_VERSION,
+	DEFAULT_GLOBAL_SETTINGS,
 	DEFAULT_WORKSPACE_SETTINGS,
 	TaskStore,
 	UNASSIGNED,
 	migrate,
 	normalizeState,
 	normalizeTask,
+	normalizeGlobalSettings,
 	normalizeWorkspaceSettings,
 	TASK_STATUS,
 } from '../host/state.js';
@@ -49,8 +51,8 @@ function memoryFs(initial = {}) {
 	};
 }
 
-test('workspace settings are repaired field by field', () => {
-	const settings = normalizeWorkspaceSettings({
+test('the shared settings are repaired field by field', () => {
+	const settings = normalizeGlobalSettings({
 		enabled: 'yes',
 		windows: [{ start: '25:00', end: '07:00' }, { start: '09:00', end: '17:00' }],
 		timeZone: 'Mars/Olympus',
@@ -66,23 +68,38 @@ test('workspace settings are repaired field by field', () => {
 	assert.equal(settings.taskTimeoutMinutes, 1, 'clamped to the floor');
 });
 
+test('a workspace entry keeps only its interval', () => {
+	// The other fields are the plugin's. Feeding them to a workspace must not
+	// store them there, or the per-workspace copy this model removed would come
+	// straight back the next time a v2-shaped object was normalized.
+	const settings = normalizeWorkspaceSettings({
+		cooldownMinutes: 45,
+		windows: [{ start: '09:00', end: '17:00' }],
+		timeZone: 'UTC',
+		targetMode: 'fresh',
+		enabled: false,
+	});
+	assert.equal(settings.cooldownMinutes, 45, 'the interval is kept');
+	assert.deepEqual(Object.keys(settings), ['cooldownMinutes'], 'and nothing else is stored');
+});
+
 test('a settings object with no window list falls back to the default night window', () => {
 	assert.deepEqual(
-		normalizeWorkspaceSettings({ enabled: true }).windows,
-		DEFAULT_WORKSPACE_SETTINGS.windows.map((window) => ({ ...window })),
+		normalizeGlobalSettings({ enabled: true }).windows,
+		DEFAULT_GLOBAL_SETTINGS.windows.map((window) => ({ ...window })),
 	);
 });
 
 test('the legacy startTime/endTime pair still produces the hours it meant', () => {
 	// A composition config or a v1 document written before windows were a list.
-	const settings = normalizeWorkspaceSettings({ startTime: '22:00', endTime: '06:00', timeZone: 'UTC' });
+	const settings = normalizeGlobalSettings({ startTime: '22:00', endTime: '06:00', timeZone: 'UTC' });
 	assert.deepEqual(settings.windows, [{ start: '22:00', end: '06:00' }]);
 	assert.equal(settings.timeZone, 'UTC');
 });
 
 test('an empty window list is kept as an explicit answer', () => {
-	assert.deepEqual(normalizeWorkspaceSettings({ windows: [] }).windows, [], 'nothing is scheduled');
-	assert.deepEqual(normalizeWorkspaceSettings({ windows: 'nope' }).windows, [{ start: '18:00', end: '07:00' }]);
+	assert.deepEqual(normalizeGlobalSettings({ windows: [] }).windows, [], 'nothing is scheduled');
+	assert.deepEqual(normalizeGlobalSettings({ windows: 'nope' }).windows, [{ start: '18:00', end: '07:00' }]);
 });
 
 test('a task with no usable text is dropped, not repaired', () => {
@@ -155,10 +172,14 @@ test('two workspaces hold two independent queues', () => {
 	assert.deepEqual(store.workspacesWithTasks().sort(), ['ws-1', 'ws-2']);
 });
 
-test('the seed does not overwrite hours the user has already edited', () => {
+test('the durable settings win over the composition config', () => {
+	// The composition config seeds a *new* document. Once the document holds its
+	// own settings, those are the truth — otherwise restarting the Host would
+	// undo every change the user made in the page.
 	const seeded = JSON.stringify(
 		normalizeState({
-			workspaces: { 'ws-1': { settings: { windows: [{ start: '22:00', end: '05:00' }] } } },
+			settings: { windows: [{ start: '22:00', end: '05:00' }] },
+			workspaces: {},
 			tasks: [],
 		}),
 	);
@@ -170,12 +191,27 @@ test('the seed does not overwrite hours the user has already edited', () => {
 	});
 	store.load();
 	assert.deepEqual(
-		store.settingsFor('ws-1').windows,
+		store.globalSettings().windows,
 		[{ start: '22:00', end: '05:00' }],
-		'the durable window wins over the composition config',
+		'the durable hours win over the composition config',
 	);
-	// A workspace that has never been seen still takes the seed.
-	assert.deepEqual(store.settingsFor('ws-2').windows, [{ start: '20:00', end: '06:00' }]);
+	assert.deepEqual(
+		store.settingsFor('any-workspace').windows,
+		[{ start: '22:00', end: '05:00' }],
+		'and every workspace reads them, seen or not',
+	);
+});
+
+test('a fresh document takes the composition config as its settings', () => {
+	const fs = memoryFs();
+	const store = new TaskStore({
+		file: '/q.json',
+		fs,
+		seedSettings: { windows: [{ start: '20:00', end: '06:00' }], timeZone: 'UTC' },
+	});
+	store.load();
+	assert.deepEqual(store.globalSettings().windows, [{ start: '20:00', end: '06:00' }]);
+	assert.equal(store.globalSettings().timeZone, 'UTC');
 });
 
 test('a corrupted file opens empty and reports the error', () => {
@@ -205,7 +241,8 @@ test('a reopen reads back exactly what was committed', () => {
 	first.load();
 	first.mutate((state) => {
 		state.tasks.push(normalizeTask({ prompt: 'survives', id: 'a', seq: 7, workspaceId: 'ws-1' }));
-		state.workspaces['ws-1'] = { settings: normalizeWorkspaceSettings({ windows: [{ start: '21:30', end: '06:00' }] }) };
+		state.settings = normalizeGlobalSettings({ windows: [{ start: '21:30', end: '06:00' }] });
+		state.workspaces['ws-1'] = { settings: normalizeWorkspaceSettings({ cooldownMinutes: 15 }) };
 	});
 	const second = new TaskStore({ file: '/q.json', fs });
 	second.load();
@@ -213,6 +250,7 @@ test('a reopen reads back exactly what was committed', () => {
 	assert.equal(second.tasks[0].seq, 7);
 	assert.equal(second.tasks[0].workspaceId, 'ws-1');
 	assert.deepEqual(second.settingsFor('ws-1').windows, [{ start: '21:30', end: '06:00' }]);
+	assert.equal(second.settingsFor('ws-1').cooldownMinutes, 15, 'and the interval came back too');
 });
 
 test('a pre-workspace document is migrated, not discarded', () => {
@@ -229,26 +267,76 @@ test('a pre-workspace document is migrated, not discarded', () => {
 		},
 		tasks: [{ id: 'old', prompt: 'still mine', createdAt: 1, seq: 1 }],
 	};
-	const { document, seed } = migrate(legacy);
+	const { document } = migrate(legacy);
 	assert.equal(document.version, DOCUMENT_VERSION);
 	assert.equal(document.tasks.length, 1, 'the queued work survives the upgrade');
 	assert.equal(document.tasks[0].workspaceId, UNASSIGNED, 'and is honest about belonging to no workspace');
 	assert.equal(document.tasks[0].prompt, 'still mine');
-	// The old hours become the seed every workspace starts from.
-	assert.deepEqual(seed.windows, [{ start: '20:00', end: '05:30' }]);
-	assert.equal(seed.timeZone, 'UTC');
-	assert.equal(seed.autoApprove, false);
-	assert.deepEqual(
-		document.workspaces['the-one-i-used'].settings.windows,
-		[{ start: '20:00', end: '05:30' }],
-		'the hours land on the workspace the old settings named',
-	);
+	// The old hours are what every workspace now runs on, stored once.
+	assert.deepEqual(document.settings.windows, [{ start: '20:00', end: '05:30' }]);
+	assert.equal(document.settings.timeZone, 'UTC');
+	assert.equal(document.settings.autoApprove, false);
 
 	const fs = memoryFs({ '/q.json': JSON.stringify(legacy) });
 	const store = new TaskStore({ file: '/q.json', fs });
 	store.load();
 	assert.equal(store.tasksOf(UNASSIGNED).length, 1);
-	assert.deepEqual(store.settingsFor('ws-1').windows, [{ start: '20:00', end: '05:30' }], 'a new workspace inherits them');
+	assert.deepEqual(
+		store.settingsFor('ws-1').windows,
+		[{ start: '20:00', end: '05:30' }],
+		'every workspace reads the carried-forward hours',
+	);
+});
+
+test('a v2 document has its shared fields lifted and its intervals kept', () => {
+	// v2 stored a full copy of every setting against each workspace. The shared
+	// fields are lifted into one place — taking the value most workspaces already
+	// used — while each workspace keeps its own interval.
+	const v2 = {
+		version: 2,
+		workspaces: {
+			'ws-a': {
+				settings: { windows: [{ start: '18:00', end: '07:00' }], timeZone: 'UTC', cooldownMinutes: 30 },
+				lastFinishedAt: 1234,
+			},
+			'ws-b': {
+				settings: { windows: [{ start: '18:00', end: '07:00' }], timeZone: 'UTC', cooldownMinutes: 5 },
+			},
+			'ws-c': {
+				settings: { windows: [{ start: '09:00', end: '17:00' }], timeZone: 'UTC', cooldownMinutes: 0 },
+			},
+		},
+		tasks: [{ id: 't', prompt: 'work', createdAt: 1, seq: 1, workspaceId: 'ws-a' }],
+	};
+	const { document } = migrate(v2);
+	assert.equal(document.version, DOCUMENT_VERSION);
+	// Two of three workspaces used the night window, so that is the one kept.
+	assert.deepEqual(document.settings.windows, [{ start: '18:00', end: '07:00' }], 'the majority value wins');
+	assert.equal(document.settings.timeZone, 'UTC');
+
+	assert.equal(document.workspaces['ws-a'].settings.cooldownMinutes, 30);
+	assert.equal(document.workspaces['ws-b'].settings.cooldownMinutes, 5);
+	assert.equal(document.workspaces['ws-c'].settings.cooldownMinutes, 0);
+	assert.deepEqual(
+		Object.keys(document.workspaces['ws-a'].settings),
+		['cooldownMinutes'],
+		'and a workspace entry no longer carries a settings copy',
+	);
+	assert.equal(document.workspaces['ws-a'].lastFinishedAt, 1234, 'the cooldown anchor is untouched');
+	assert.equal(document.tasks.length, 1, 'tasks survive');
+
+	// Every workspace now reports the one shared answer, whatever its old copy said.
+	const store = new TaskStore({ file: '/q.json', fs: memoryFs({ '/q.json': JSON.stringify(v2) }) });
+	store.load();
+	for (const id of ['ws-a', 'ws-b', 'ws-c']) {
+		assert.deepEqual(
+			store.settingsFor(id).windows,
+			[{ start: '18:00', end: '07:00' }],
+			`${id} reads the shared hours`,
+		);
+	}
+	assert.equal(store.settingsFor('ws-a').cooldownMinutes, 30, 'while keeping its own interval');
+	assert.equal(store.settingsFor('ws-b').cooldownMinutes, 5);
 });
 
 test('subscribers hear about committed changes only', () => {

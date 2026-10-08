@@ -96,10 +96,44 @@ export const TARGET_MODE = Object.freeze({
 export const UNASSIGNED = '';
 
 /** The document's current version. */
-export const DOCUMENT_VERSION = 2;
+export const DOCUMENT_VERSION = 3;
 
-/** Default per-workspace settings; every field is validated on read, so this is also the repair table. */
-export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
+/**
+ * The fields that belong to the plugin rather than to a workspace.
+ *
+ * These are configured once for the whole queue: the hours, the zone, the
+ * approval bypass, the target mode, the timeout, the compaction switch. They
+ * describe how the queue itself behaves, and two projects wanting different
+ * answers is the exception, not the rule — so they live in one place and a
+ * workspace never has its own copy to drift out of sync.
+ *
+ * `runnerSessionId` is here rather than per workspace because a shared runner is
+ * a property of the execution mode: if the mode is shared, the queue keeps one
+ * session for the tasks it drives.
+ */
+export const GLOBAL_SETTING_FIELDS = Object.freeze([
+	'enabled',
+	'windows',
+	'timeZone',
+	'autoApprove',
+	'targetMode',
+	'runnerSessionId',
+	'taskTimeoutMinutes',
+	'compactBeforeTask',
+]);
+
+/**
+ * The one setting a workspace owns.
+ *
+ * The interval is the field that legitimately differs between two projects: one
+ * repository may be rate-limited, another may be a scratch space worth working
+ * through quickly. It is therefore the per-workspace setting, and the only one
+ * stored against a workspace.
+ */
+export const WORKSPACE_SETTING_FIELDS = Object.freeze(['cooldownMinutes']);
+
+/** Default settings; every field is validated on read, so this is also the repair table. */
+export const DEFAULT_GLOBAL_SETTINGS = Object.freeze({
 	/** Master switch: when false, nothing is claimed at any hour. */
 	enabled: true,
 	/** The allowed intervals. An empty list schedules nothing. */
@@ -110,19 +144,10 @@ export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
 	autoApprove: true,
 	/** How a task's session is chosen. */
 	targetMode: TARGET_MODE.shared,
-	/** The shared runner session once one has been created for this workspace. */
+	/** The shared runner session once one has been created. */
 	runnerSessionId: '',
 	/** Minutes a single task may run before the queue marks it failed. */
 	taskTimeoutMinutes: 360,
-	/**
-	 * Minutes to wait after a task finishes before starting the next one.
-	 *
-	 * Zero means "start the next one as soon as a slot is free". A positive value
-	 * paces a batch out, which matters when the work itself is rate-limited or
-	 * simply when a queue that hammers through twenty tasks in five minutes is not
-	 * what anyone wanted.
-	 */
-	cooldownMinutes: 0,
 	/**
 	 * Compact the session before each task.
 	 *
@@ -136,6 +161,33 @@ export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
 	 * applies to a fresh session per task — where there is nothing to compact.
 	 */
 	compactBeforeTask: false,
+});
+
+/**
+ * The one setting a workspace owns, with its default.
+ *
+ * Kept as its own table so a workspace entry is self-describing: what is in it is
+ * the interval and nothing else.
+ */
+export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
+	/**
+	 * Minutes to wait after a task finishes before starting the next one.
+	 *
+	 * Zero means "start the next one as soon as a slot is free". A positive value
+	 * paces a batch out, which matters when the work itself is rate-limited or
+	 * simply when a queue that hammers through twenty tasks in five minutes is not
+	 * what anyone wanted.
+	 *
+	 * This is the per-workspace setting because it is the one two projects
+	 * genuinely answer differently.
+	 */
+	cooldownMinutes: 0,
+});
+
+/** Every setting in its repaired form, for callers that want one flattened view. */
+export const DEFAULT_SETTINGS = Object.freeze({
+	...DEFAULT_GLOBAL_SETTINGS,
+	...DEFAULT_WORKSPACE_SETTINGS,
 });
 
 /** Hard limits, applied on read so a hand-edited file cannot wedge the queue. */
@@ -189,7 +241,7 @@ export function defaultFilePath() {
  * @param {unknown} raw - an untrusted settings patch.
  * @returns {object} the valid subset of that patch.
  */
-export function sanitizeWorkspaceSettingsPatch(raw) {
+export function sanitizeGlobalSettingsPatch(raw) {
 	const source = raw !== null && typeof raw === 'object' ? raw : {};
 	const patch = {};
 	if (typeof source.enabled === 'boolean') patch.enabled = source.enabled;
@@ -199,19 +251,47 @@ export function sanitizeWorkspaceSettingsPatch(raw) {
 	if (typeof source.compactBeforeTask === 'boolean') patch.compactBeforeTask = source.compactBeforeTask;
 	if (Object.values(TARGET_MODE).includes(source.targetMode)) patch.targetMode = source.targetMode;
 	if (typeof source.runnerSessionId === 'string') patch.runnerSessionId = source.runnerSessionId;
-	for (const [key, bounds] of Object.entries({
-		taskTimeoutMinutes: LIMITS.taskTimeoutMinutes,
-		cooldownMinutes: LIMITS.cooldownMinutes,
-	})) {
-		if (source[key] === undefined || source[key] === null || source[key] === '') continue;
-		if (!Number.isFinite(Number(source[key]))) continue;
-		patch[key] = clampNumber(source[key], bounds, DEFAULT_WORKSPACE_SETTINGS[key]);
+	if (source.taskTimeoutMinutes !== undefined && source.taskTimeoutMinutes !== null && source.taskTimeoutMinutes !== '') {
+		if (Number.isFinite(Number(source.taskTimeoutMinutes))) {
+			patch.taskTimeoutMinutes = clampNumber(
+				source.taskTimeoutMinutes,
+				LIMITS.taskTimeoutMinutes,
+				DEFAULT_WORKSPACE_SETTINGS.taskTimeoutMinutes,
+			);
+		}
 	}
 	return patch;
 }
 
 /**
- * Normalize one workspace's settings.
+ * Keep the valid subset of a settings patch, field by field.
+ *
+ * This is the whole reason a bad field is survivable. Normalizing
+ * `{...current, startTime: '99:99'}` would repair the value against the
+ * *defaults*, so one mistyped field would silently reset it to a factory value
+ * instead of leaving what the user had. Dropping the invalid field entirely
+ * means "repaired" always means "unchanged", never "reset".
+ *
+ * @param {unknown} raw - an untrusted settings patch.
+ * @returns {object} the valid subset of that patch.
+ */
+export function sanitizeWorkspaceSettingsPatch(raw) {
+	const source = raw !== null && typeof raw === 'object' ? raw : {};
+	const patch = {};
+	if (source.cooldownMinutes !== undefined && source.cooldownMinutes !== null && source.cooldownMinutes !== '') {
+		if (Number.isFinite(Number(source.cooldownMinutes))) {
+			patch.cooldownMinutes = clampNumber(
+				source.cooldownMinutes,
+				LIMITS.cooldownMinutes,
+				DEFAULT_WORKSPACE_SETTINGS.cooldownMinutes,
+			);
+		}
+	}
+	return patch;
+}
+
+/**
+ * Normalize the plugin-wide settings.
  *
  * `startTime`/`endTime`, the pre-window-list spelling, are accepted here so a
  * composition config or a document written in that shape still produces the
@@ -220,19 +300,35 @@ export function sanitizeWorkspaceSettingsPatch(raw) {
  * @param {unknown} raw - untrusted settings.
  * @returns {object} complete, valid settings.
  */
-export function normalizeWorkspaceSettings(raw) {
+export function normalizeGlobalSettings(raw) {
 	const source = raw !== null && typeof raw === 'object' ? raw : {};
-	const patch = sanitizeWorkspaceSettingsPatch(source);
-	const settings = { ...DEFAULT_WORKSPACE_SETTINGS, ...patch };
+	const patch = sanitizeGlobalSettingsPatch(source);
+	const settings = { ...DEFAULT_GLOBAL_SETTINGS, ...patch };
 	if (patch.windows === undefined) {
 		// No valid window list was supplied, so fall back to the legacy pair when
 		// it is there, and only then to the default night window.
 		settings.windows =
 			isTimeOfDay(source.startTime) && isTimeOfDay(source.endTime)
 				? [{ start: source.startTime, end: source.endTime }]
-				: DEFAULT_WORKSPACE_SETTINGS.windows.map((window) => ({ ...window }));
+				: DEFAULT_GLOBAL_SETTINGS.windows.map((window) => ({ ...window }));
 	}
 	return settings;
+}
+
+/**
+ * Normalize one workspace's settings.
+ *
+ * A workspace owns exactly one setting — the execution interval — so this is a
+ * one-field object. Anything else in the input is ignored rather than stored:
+ * the other settings are the plugin's, and a stale copy per workspace is exactly
+ * the drift this model removes.
+ *
+ * @param {unknown} raw - untrusted settings.
+ * @returns {object} the workspace's interval.
+ */
+export function normalizeWorkspaceSettings(raw) {
+	const source = raw !== null && typeof raw === 'object' ? raw : {};
+	return { ...DEFAULT_WORKSPACE_SETTINGS, ...sanitizeWorkspaceSettingsPatch(source) };
 }
 
 /**
@@ -283,6 +379,7 @@ export function normalizeTask(raw) {
  */
 export function normalizeState(raw) {
 	const source = raw !== null && typeof raw === 'object' ? raw : {};
+	const settings = normalizeGlobalSettings(source.settings);
 	const workspaces = {};
 	const rawWorkspaces = source.workspaces !== null && typeof source.workspaces === 'object' ? source.workspaces : {};
 	for (const [key, value] of Object.entries(rawWorkspaces)) {
@@ -302,37 +399,97 @@ export function normalizeState(raw) {
 		if (task !== undefined) tasks.push(task);
 	}
 	tasks.sort((left, right) => left.seq - right.seq || left.createdAt - right.createdAt);
-	return { version: DOCUMENT_VERSION, workspaces, tasks };
+	return { version: DOCUMENT_VERSION, settings, workspaces, tasks };
 }
 
 /**
- * Bring a pre-workspace document forward.
+ * Bring an older document forward.
  *
- * A v1 document had one global settings object and a flat task list. Its hours
- * are worth keeping, so they become the seed every workspace starts from; its
- * tasks go to {@link UNASSIGNED}, because guessing which workspace they belonged
- * to would be worse than saying plainly that they belong to none.
+ * Two shapes precede this one, and both are repaired rather than discarded.
+ *
+ * A **v1** document had one global settings object and a flat task list. Its
+ * settings are what this version wants anyway, so they become the global
+ * settings; its tasks go to {@link UNASSIGNED}, because guessing which workspace
+ * they belonged to would be worse than saying plainly that they belong to none.
+ *
+ * A **v2** document kept a full copy of every setting against each workspace.
+ * The shared fields have to be lifted into one place, and they may disagree
+ * across workspaces — the migration picks the value the most workspaces already
+ * use, preferring the first workspace in the document on a tie, so the queue
+ * keeps the hours it was mostly running on instead of an arbitrary one. Every
+ * workspace keeps its own interval, which is the field that stays per workspace.
  *
  * @param {unknown} raw - a parsed document of any version.
- * @returns {{ document: object, seed: object | undefined }} the document and the settings seed to adopt.
+ * @returns {{ document: object, seed: object | undefined }} the document and the plugin settings to adopt.
  */
 export function migrate(raw) {
 	const source = raw !== null && typeof raw === 'object' ? raw : {};
-	const isLegacy = source.version !== DOCUMENT_VERSION && source.workspaces === undefined;
-	if (!isLegacy) return { document: normalizeState(source), seed: undefined };
+	const hasWorkspaces = source.workspaces !== null && typeof source.workspaces === 'object';
+	const isCurrent = source.version === DOCUMENT_VERSION && hasWorkspaces && source.settings !== undefined;
+	if (isCurrent) return { document: normalizeState(source), seed: undefined };
 
-	const legacy = source.settings !== null && typeof source.settings === 'object' ? source.settings : {};
-	const seed = normalizeWorkspaceSettings(legacy);
-	const tasks = (Array.isArray(source.tasks) ? source.tasks : []).map((task) =>
-		task !== null && typeof task === 'object' ? { ...task, workspaceId: UNASSIGNED } : task,
+	if (!hasWorkspaces) {
+		// v1: one settings object, a flat task list.
+		const legacy = source.settings !== null && typeof source.settings === 'object' ? source.settings : {};
+		const tasks = (Array.isArray(source.tasks) ? source.tasks : []).map((task) =>
+			task !== null && typeof task === 'object' ? { ...task, workspaceId: UNASSIGNED } : task,
+		);
+		const document = normalizeState({ settings: legacy, workspaces: {}, tasks });
+		return { document, seed: undefined };
+	}
+
+	// v2: per-workspace copies of everything. Lift the shared fields.
+	const rawWorkspaces = source.workspaces;
+	const chosen = pickSharedSettings(rawWorkspaces);
+	const workspaces = {};
+	for (const [key, value] of Object.entries(rawWorkspaces)) {
+		const record = value !== null && typeof value === 'object' ? value : {};
+		// Only the interval is stored per workspace now; the rest is ignored here
+		// because it has just been lifted into the one global copy.
+		workspaces[key] = { settings: normalizeWorkspaceSettings(record.settings) };
+		const finished = Number(record.lastFinishedAt);
+		if (Number.isFinite(finished) && finished > 0) workspaces[key].lastFinishedAt = finished;
+	}
+	const tasks = (Array.isArray(source.tasks) ? source.tasks : []).filter(
+		(task) => task !== null && typeof task === 'object',
 	);
-	const document = normalizeState({ workspaces: {}, tasks });
-	// The old settings named the workspace they applied to. Writing them there as
-	// well as seeding from them means the user keeps exactly the state they had,
-	// without the seed being hidden behind a workspace they never named.
-	const prior = typeof legacy.workspaceId === 'string' ? legacy.workspaceId.trim() : '';
-	if (prior.length > 0) document.workspaces[prior] = { settings: normalizeWorkspaceSettings({ ...seed }) };
-	return { document, seed };
+	const document = normalizeState({ settings: chosen, workspaces, tasks });
+	return { document, seed: undefined };
+}
+
+/**
+ * The shared settings a v2 document agreed on, for the migration to adopt.
+ *
+ * Counts how many workspaces hold each candidate value and takes the most
+ * popular, preferring the earliest workspace on a tie so the outcome is
+ * deterministic. A field no workspace set falls back to its default.
+ *
+ * @param {object} rawWorkspaces - the v2 per-workspace records.
+ * @returns {object} the settings to carry forward.
+ */
+function pickSharedSettings(rawWorkspaces) {
+	const entries = Object.entries(rawWorkspaces).filter(
+		([, value]) => value !== null && typeof value === 'object',
+	);
+	const chosen = {};
+	for (const field of GLOBAL_SETTING_FIELDS) {
+		const tally = new Map();
+		for (const [, record] of entries) {
+			const settings = record.settings;
+			if (settings === null || typeof settings !== 'object') continue;
+			if (!(field in settings)) continue;
+			const key = JSON.stringify(settings[field] ?? null);
+			const seen = tally.get(key);
+			if (seen === undefined) tally.set(key, { count: 1, value: settings[field] });
+			else seen.count += 1;
+		}
+		let best;
+		for (const candidate of tally.values()) {
+			if (best === undefined || candidate.count > best.count) best = candidate;
+		}
+		if (best !== undefined) chosen[field] = best.value;
+	}
+	return chosen;
 }
 
 /**
@@ -356,28 +513,28 @@ export class TaskStore {
 	 * @param {object} [options] - construction options.
 	 * @param {string} [options.file] - durable document path.
 	 * @param {object} [options.fs] - injectable filesystem, for tests.
-	 * @param {object} [options.seedSettings] - per-workspace settings a new workspace starts from.
+	 * @param {object} [options.seedSettings] - the plugin-wide settings a fresh document starts from.
 	 * @param {(error: unknown) => void} [options.onError] - persistence failure sink.
 	 */
 	constructor(options = {}) {
 		this.file = options.file ?? defaultFilePath();
 		this.fs = options.fs ?? { mkdirSync, readFileSync, renameSync, writeFileSync };
 		this.onError = options.onError ?? (() => {});
-		this.seedSettings = normalizeWorkspaceSettings(options.seedSettings);
+		this.seedSettings = normalizeGlobalSettings(options.seedSettings);
 		this.state = this.empty();
 	}
 
 	/**
 	 * A fresh document, seeded from the plugin's composition config.
 	 *
-	 * The seed applies only to a workspace that has never been seen: once the
-	 * user has edited a workspace's hours in the page, the document is the truth
-	 * and the composition config must not silently overwrite it.
+	 * The plugin-wide settings come from that seed; the document keeps them once
+	 * it exists, so the composition config cannot silently overwrite an edit the
+	 * user made in the page.
 	 *
 	 * @returns {object} an empty document.
 	 */
 	empty() {
-		return normalizeState({ workspaces: {}, tasks: [] });
+		return normalizeState({ settings: { ...this.seedSettings }, workspaces: {}, tasks: [] });
 	}
 
 	/**
@@ -450,16 +607,36 @@ export class TaskStore {
 	}
 
 	/**
-	 * One workspace's effective settings, whether or not it has been written yet.
+	 * One workspace's effective settings: the plugin's, plus its own interval.
+	 *
+	 * This is the one place the two halves are joined, so every caller — the
+	 * scheduler, the dispatcher, the routes — sees a single flat object and does
+	 * not have to know which half a field came from. A workspace that has never
+	 * been written reads the plugin defaults for its interval rather than
+	 * persisting anything, so a read is still just a read.
+	 *
 	 * @param {string} workspaceId - the workspace.
-	 * @returns {object} its settings.
+	 * @returns {object} its effective settings.
 	 */
 	settingsFor(workspaceId) {
-		const stored = this.state.workspaces[workspaceId];
-		if (stored !== undefined) return stored.settings;
-		// Not yet materialized: return a copy of the seed, so a first write is just
-		// a write and a read never has to persist anything.
-		return normalizeWorkspaceSettings({ ...this.seedSettings });
+		const own = this.state.workspaces[workspaceId]?.settings;
+		const interval = own ?? normalizeWorkspaceSettings({});
+		const global = this.globalSettings();
+		// A copy, so a caller cannot reach into the document by mutating what it
+		// was handed — the window list is the one nested value worth guarding.
+		return {
+			...global,
+			...interval,
+			windows: global.windows.map((window) => ({ ...window })),
+		};
+	}
+
+	/**
+	 * The plugin-wide settings, repaired.
+	 * @returns {object} the global settings.
+	 */
+	globalSettings() {
+		return normalizeGlobalSettings(this.state.settings);
 	}
 
 	/**

@@ -419,3 +419,39 @@ test('the loopback and JSON filters accept only what they should', () => {
 	assert.equal(isJsonContentType('text/plain'), false);
 	assert.equal(isJsonContentType(undefined), false);
 });
+
+test('a shared setting changed from one workspace applies to every workspace', async () => {
+	// The requirement: only the interval is per workspace. Changing the hours from
+	// one workspace's page changes the queue as a whole, so the other workspace's
+	// session reads the same hours back.
+	const server = await startServer();
+	try {
+		await server.post('/settings', { windows: [{ start: '09:00', end: '17:00' }] });
+		const other = await server.call('/state?sessionId=session-b');
+		assert.deepEqual(
+			other.body.settings.windows,
+			[{ start: '09:00', end: '17:00' }],
+			'the other workspace sees the shared hours',
+		);
+	} finally {
+		await server.close();
+	}
+});
+
+test('the interval is the one setting a workspace keeps to itself', async () => {
+	// The other half: pacing a batch out in one workspace must not slow the other.
+	const server = await startServer();
+	try {
+		await server.post('/settings', { cooldownMinutes: 30 });
+		await server.post('/settings', { sessionId: 'session-b', cooldownMinutes: 0 });
+
+		const first = await server.call('/state?sessionId=session-a');
+		const second = await server.call('/state?sessionId=session-b');
+		assert.equal(first.body.settings.cooldownMinutes, 30, 'ws-1 keeps its own interval');
+		assert.equal(second.body.settings.cooldownMinutes, 0, 'ws-2 keeps a different one');
+		// The shared fields have one copy, so the two workspaces cannot disagree.
+		assert.deepEqual(first.body.settings.windows, second.body.settings.windows);
+	} finally {
+		await server.close();
+	}
+});

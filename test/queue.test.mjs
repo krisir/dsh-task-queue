@@ -167,9 +167,9 @@ test('reordering ignores unknown and duplicate ids', () => {
 test('a partial settings patch touches only the fields it names', () => {
 	const state = emptyState();
 	patchSettings(state, WS, { windows: [{ start: '19:15', end: '07:00' }], timeZone: 'UTC' }, {});
-	assert.deepEqual(state.workspaces[WS].settings.windows, [{ start: '19:15', end: '07:00' }]);
-	assert.equal(state.workspaces[WS].settings.timeZone, 'UTC');
-	assert.equal(state.workspaces[WS].settings.autoApprove, true, 'untouched fields survive');
+	assert.deepEqual(state.settings.windows, [{ start: '19:15', end: '07:00' }]);
+	assert.equal(state.settings.timeZone, 'UTC');
+	assert.equal(state.settings.autoApprove, true, 'untouched fields survive');
 });
 
 test('an invalid scalar patch field is dropped rather than reset to the factory value', () => {
@@ -180,13 +180,9 @@ test('an invalid scalar patch field is dropped rather than reset to the factory 
 	const state = emptyState();
 	patchSettings(state, WS, { windows: [{ start: '21:00', end: '05:30' }], timeZone: 'UTC', cooldownMinutes: 3 }, {});
 	patchSettings(state, WS, { timeZone: 'Mars/Olympus', targetMode: 'nonsense' }, {});
-	assert.equal(state.workspaces[WS].settings.timeZone, 'UTC', 'the previous zone survives');
-	assert.equal(state.workspaces[WS].settings.targetMode, 'shared');
-	assert.deepEqual(
-		state.workspaces[WS].settings.windows,
-		[{ start: '21:00', end: '05:30' }],
-		'an untouched list survives',
-	);
+	assert.equal(state.settings.timeZone, 'UTC', 'the previous zone survives');
+	assert.equal(state.settings.targetMode, 'shared');
+	assert.deepEqual(state.settings.windows, [{ start: '21:00', end: '05:30' }], 'an untouched list survives');
 	assert.equal(state.workspaces[WS].settings.cooldownMinutes, 3);
 
 	patchSettings(state, WS, { cooldownMinutes: 999999 }, {});
@@ -203,7 +199,7 @@ test('an invalid window entry is dropped and the valid ones are kept', () => {
 		{ windows: [{ start: '21:00', end: '05:30' }, { start: '99:99', end: '01:00' }, { start: '09:00', end: '17:00' }] },
 		{},
 	);
-	assert.deepEqual(state.workspaces[WS].settings.windows, [
+	assert.deepEqual(state.settings.windows, [
 		{ start: '21:00', end: '05:30' },
 		{ start: '09:00', end: '17:00' },
 	]);
@@ -213,15 +209,31 @@ test('an empty window list is a real instruction, not a missing field', () => {
 	const state = emptyState();
 	patchSettings(state, WS, { windows: [{ start: '21:00', end: '05:30' }] }, {});
 	patchSettings(state, WS, { windows: [] }, {});
-	assert.deepEqual(state.workspaces[WS].settings.windows, [], 'schedule nothing');
+	assert.deepEqual(state.settings.windows, [], 'schedule nothing');
 });
 
-test('settings are per workspace', () => {
+test('the interval is per workspace while the rest is shared', () => {
 	const state = emptyState();
-	patchSettings(state, 'ws-1', { windows: [{ start: '18:00', end: '07:00' }] }, {});
-	patchSettings(state, 'ws-2', { windows: [{ start: '12:00', end: '13:00' }] }, {});
-	assert.deepEqual(state.workspaces['ws-1'].settings.windows, [{ start: '18:00', end: '07:00' }]);
-	assert.deepEqual(state.workspaces['ws-2'].settings.windows, [{ start: '12:00', end: '13:00' }]);
+	// Two workspaces, each setting an interval, with one of them also asking for
+	// hours. The intervals must not touch each other; the hours must not be stored
+	// per workspace at all.
+	patchSettings(state, 'ws-1', { cooldownMinutes: 30, windows: [{ start: '18:00', end: '07:00' }] }, {});
+	patchSettings(state, 'ws-2', { cooldownMinutes: 5 }, {});
+
+	assert.equal(state.workspaces['ws-1'].settings.cooldownMinutes, 30);
+	assert.equal(state.workspaces['ws-2'].settings.cooldownMinutes, 5);
+	assert.deepEqual(
+		Object.keys(state.workspaces['ws-1'].settings),
+		['cooldownMinutes'],
+		'a workspace stores its interval and nothing else',
+	);
+
+	// The hours went to the one global object, so every workspace agrees on them.
+	assert.deepEqual(state.settings.windows, [{ start: '18:00', end: '07:00' }]);
+	// The second call carried no hours, so it did not disturb them.
+	patchSettings(state, 'ws-2', { cooldownMinutes: 6 }, {});
+	assert.deepEqual(state.settings.windows, [{ start: '18:00', end: '07:00' }], 'still the same hours');
+	assert.equal(state.workspaces['ws-2'].settings.cooldownMinutes, 6, 'and the interval moved');
 });
 
 test('unassigned tasks can be adopted into a workspace', () => {

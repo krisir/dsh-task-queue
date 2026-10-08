@@ -155,13 +155,11 @@ export class Dispatcher {
 	 */
 	resumeManagedSessions() {
 		for (const record of this.inFlight.values()) this.privileges.manage(record.sessionId);
-		for (const workspace of Object.values(this.store.state.workspaces)) {
-			const settings = workspace.settings;
-			if (!settings.autoApprove) continue;
-			if (settings.targetMode === TARGET_MODE.fresh) continue;
-			if (settings.runnerSessionId.length === 0) continue;
-			this.privileges.manage(settings.runnerSessionId);
-		}
+		const settings = this.store.globalSettings();
+		if (!settings.autoApprove) return;
+		if (settings.targetMode === TARGET_MODE.fresh) return;
+		if (settings.runnerSessionId.length === 0) return;
+		this.privileges.manage(settings.runnerSessionId);
 	}
 
 	/**
@@ -425,7 +423,7 @@ export class Dispatcher {
 			// The execution cooldown measures from here, so the anchor is written in
 			// the same commit as the finish — a crash in between cannot leave a task
 			// closed with no idea when the next one may start.
-			markWorkspaceFinished(state, stored.workspaceId, finishedAt, this.store.seedSettings);
+			markWorkspaceFinished(state, stored.workspaceId, finishedAt);
 		});
 		if (sessionId !== undefined) this.#releaseIfUnused(sessionId);
 	}
@@ -440,13 +438,13 @@ export class Dispatcher {
 	 * @param {string} sessionId - the session to reconsider.
 	 */
 	#releaseIfUnused(sessionId) {
-		for (const workspace of Object.values(this.store.state.workspaces)) {
-			const settings = workspace.settings;
-			if (settings.targetMode === TARGET_MODE.fresh) continue;
-			if (settings.runnerSessionId !== sessionId) continue;
-			return;
-		}
-		this.privileges.release(sessionId);
+		// The shared runner is a plugin-wide setting, so there is one session to
+		// compare against rather than one per workspace. A fresh-session mode has no
+		// runner at all, so nothing is held back.
+		const settings = this.store.globalSettings();
+		const isSharedRunner =
+			settings.targetMode !== TARGET_MODE.fresh && settings.runnerSessionId === sessionId;
+		if (!isSharedRunner) this.privileges.release(sessionId);
 	}
 
 	/** Fail every in-flight task and forget it, without touching the queue. */
