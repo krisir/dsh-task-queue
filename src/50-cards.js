@@ -176,13 +176,18 @@ function ArchivedCard({ t, sessionId, task }) {
 function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 	const editing = useStore(uiStore, (state) => state.editingId === task.id);
 	const busy = useStore(uiStore, (state) => state.busy === task.id);
-	const [promptDraft, setPromptDraft] = useState(task.prompt);
-
-	// Re-seed the draft whenever the card opens for editing, so a cancelled or
-	// externally-changed task never reappears with stale text.
-	useEffect(() => {
-		if (editing) setPromptDraft(task.prompt);
-	}, [editing, task.prompt]);
+	// The draft is the store's, not this component's: a remount must not be able
+	// to discard a half-finished edit. `null` means "not touched yet", so the
+	// field falls back to the task's own text — which is also what makes an
+	// externally-changed task show the new text rather than a stale copy.
+	//
+	// Opening the editor sets it back to null, so each edit starts from the task
+	// as it stands. There is deliberately no effect re-seeding it afterwards: a
+	// poll replaces the snapshot while the user is typing, and re-seeding on that
+	// would overwrite the very keystrokes this is here to protect.
+	const editDraft = useStore(uiStore, (state) => state.editDraft);
+	const draftText = editDraft === null ? task.prompt : editDraft;
+	const setDraftText = (value) => uiStore.set({ editDraft: value });
 
 	const parts = splitPrompt(task.prompt);
 
@@ -200,7 +205,7 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 		await mutate(sessionId, null, () => api.reorderTasks(sessionId, next));
 	};
 
-	const stopEditing = () => uiStore.set({ editingId: null });
+	const stopEditing = () => uiStore.set({ editingId: null, editDraft: null });
 
 	return h(
 		'div',
@@ -211,9 +216,9 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 					{ className: 'tq-field' },
 					h('textarea', {
 						className: 'tq-textarea',
-						value: promptDraft,
+						value: draftText,
 						'aria-label': t('card.editPrompt'),
-						onChange: (event) => setPromptDraft(event.target.value),
+						onChange: (event) => setDraftText(event.target.value),
 					}),
 				)
 			: h(
@@ -236,10 +241,10 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 						{
 							type: 'button',
 							className: 'tq-btn tq-btn-primary',
-							disabled: promptDraft.trim().length === 0,
+							disabled: draftText.trim().length === 0,
 							onClick: async () => {
 								const ok = await mutate(sessionId, task.id, () =>
-									api.updateTask(sessionId, task.id, { prompt: promptDraft }),
+									api.updateTask(sessionId, task.id, { prompt: draftText }),
 								);
 								if (ok) stopEditing();
 							},
@@ -317,7 +322,7 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 								title: t('card.edit'),
 								'aria-label': t('card.edit'),
 								disabled: busy || task.status === 'running',
-								onClick: () => uiStore.set({ editingId: task.id }),
+								onClick: () => uiStore.set({ editingId: task.id, editDraft: null }),
 							},
 							IconEdit(),
 						),

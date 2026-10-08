@@ -316,6 +316,17 @@ const uiStore = createStore({
 	draft: { title: '', prompt: '' },
 	/** The id of the task being edited inline, or null. */
 	editingId: null,
+	/**
+	 * The text of the inline edit in progress, or null when it is untouched.
+	 *
+	 * It lives here rather than in the card's own state for the same reason the
+	 * composer's draft does: the page is remounted whenever the shell rebuilds the
+	 * conversation view list, which a task starting a session is enough to cause.
+	 * Local state would be thrown away by that remount while `editingId` survived
+	 * it, so the editor would reopen holding the *old* text — looking exactly like
+	 * the page had reset what the user was halfway through typing.
+	 */
+	editDraft: null,
 	/** The settings form's uncommitted values, or null while it is untouched. */
 	settingsDraft: null,
 	/** Whether the archive-clear button is armed and waiting for a second click. */
@@ -1101,13 +1112,18 @@ function ArchivedCard({ t, sessionId, task }) {
 function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 	const editing = useStore(uiStore, (state) => state.editingId === task.id);
 	const busy = useStore(uiStore, (state) => state.busy === task.id);
-	const [promptDraft, setPromptDraft] = useState(task.prompt);
-
-	// Re-seed the draft whenever the card opens for editing, so a cancelled or
-	// externally-changed task never reappears with stale text.
-	useEffect(() => {
-		if (editing) setPromptDraft(task.prompt);
-	}, [editing, task.prompt]);
+	// The draft is the store's, not this component's: a remount must not be able
+	// to discard a half-finished edit. `null` means "not touched yet", so the
+	// field falls back to the task's own text — which is also what makes an
+	// externally-changed task show the new text rather than a stale copy.
+	//
+	// Opening the editor sets it back to null, so each edit starts from the task
+	// as it stands. There is deliberately no effect re-seeding it afterwards: a
+	// poll replaces the snapshot while the user is typing, and re-seeding on that
+	// would overwrite the very keystrokes this is here to protect.
+	const editDraft = useStore(uiStore, (state) => state.editDraft);
+	const draftText = editDraft === null ? task.prompt : editDraft;
+	const setDraftText = (value) => uiStore.set({ editDraft: value });
 
 	const parts = splitPrompt(task.prompt);
 
@@ -1125,7 +1141,7 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 		await mutate(sessionId, null, () => api.reorderTasks(sessionId, next));
 	};
 
-	const stopEditing = () => uiStore.set({ editingId: null });
+	const stopEditing = () => uiStore.set({ editingId: null, editDraft: null });
 
 	return h(
 		'div',
@@ -1136,9 +1152,9 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 					{ className: 'tq-field' },
 					h('textarea', {
 						className: 'tq-textarea',
-						value: promptDraft,
+						value: draftText,
 						'aria-label': t('card.editPrompt'),
-						onChange: (event) => setPromptDraft(event.target.value),
+						onChange: (event) => setDraftText(event.target.value),
 					}),
 				)
 			: h(
@@ -1161,10 +1177,10 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 						{
 							type: 'button',
 							className: 'tq-btn tq-btn-primary',
-							disabled: promptDraft.trim().length === 0,
+							disabled: draftText.trim().length === 0,
 							onClick: async () => {
 								const ok = await mutate(sessionId, task.id, () =>
-									api.updateTask(sessionId, task.id, { prompt: promptDraft }),
+									api.updateTask(sessionId, task.id, { prompt: draftText }),
 								);
 								if (ok) stopEditing();
 							},
@@ -1242,7 +1258,7 @@ function TaskCard({ t, sessionId, task, order, ordinal, isFirst, isLast }) {
 								title: t('card.edit'),
 								'aria-label': t('card.edit'),
 								disabled: busy || task.status === 'running',
-								onClick: () => uiStore.set({ editingId: task.id }),
+								onClick: () => uiStore.set({ editingId: task.id, editDraft: null }),
 							},
 							IconEdit(),
 						),
@@ -1831,7 +1847,7 @@ function TaskQueuePage({ t, sessionId }) {
 						type: 'button',
 						className: 'tq-tab' + (view === 'queue' ? ' tq-tab-active' : ''),
 						'aria-pressed': view === 'queue',
-						onClick: () => uiStore.set({ view: 'queue', editingId: null }),
+						onClick: () => uiStore.set({ view: 'queue', editingId: null, editDraft: null }),
 					},
 					t('page.tabQueue'),
 				),
@@ -1841,7 +1857,7 @@ function TaskQueuePage({ t, sessionId }) {
 						type: 'button',
 						className: 'tq-tab' + (view === 'archive' ? ' tq-tab-active' : ''),
 						'aria-pressed': view === 'archive',
-						onClick: () => uiStore.set({ view: 'archive', editingId: null, confirmClearArchive: false }),
+						onClick: () => uiStore.set({ view: 'archive', editingId: null, editDraft: null, confirmClearArchive: false }),
 					},
 					t('page.tabArchive'),
 					archivedCount > 0 ? h('span', { className: 'tq-tab-count' }, String(archivedCount)) : null,
@@ -1852,7 +1868,7 @@ function TaskQueuePage({ t, sessionId }) {
 						type: 'button',
 						className: 'tq-tab' + (view === 'settings' ? ' tq-tab-active' : ''),
 						'aria-pressed': view === 'settings',
-						onClick: () => uiStore.set({ view: 'settings', editingId: null, refusedFields: [] }),
+						onClick: () => uiStore.set({ view: 'settings', editingId: null, editDraft: null, refusedFields: [] }),
 					},
 					t('page.tabSettings'),
 				),

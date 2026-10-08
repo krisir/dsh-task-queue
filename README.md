@@ -102,6 +102,24 @@ is `清空归档`, so it arms on the first click and deletes on the second, and 
 what it is about to do in between. "One click" a few pixels from the search field
 is not a good enough reason to lose the history.
 
+### Why the page reads the host every five seconds
+
+The queue runs on the Host, in another process. The page is a mirror of it, so it
+re-reads the snapshot on a slow poll — that is what makes a task claimed at 18:00
+appear without anyone reloading. While a task is running the snapshot keeps
+changing, and the poll keeps picking those changes up; that is the page working,
+not the page resetting.
+
+Nothing you are typing is allowed to be a casualty of that read. No editable
+value lives in component state: the composer's text, the settings form's
+uncommitted values, and the inline task edit are all kept in the plugin's own
+store, which the poll does not touch and a remount cannot discard. The settings
+form is seeded from the host on the first edit and owns the form from then on, so
+a poll landing mid-edit cannot pull a field back to the value the Host still has.
+The inline edit is deliberately *not* re-seeded while it is open, for the same
+reason — re-seeding on a changed snapshot is exactly how a half-typed edit gets
+overwritten.
+
 ### The interval between tasks
 
 `执行间隔` paces a batch: after one task finishes, the next one waits that many
@@ -425,7 +443,7 @@ asserts the page installs no pointer-capturing gesture at all.
 
 ```sh
 node build.mjs      # regenerate client.js
-node --test test/   # 169 tests, no dependencies to install
+node --test test/   # 176 tests, no dependencies to install
 ```
 
 The suite covers the window arithmetic (the midnight wrap, the exclusive end

@@ -76,6 +76,17 @@ const uiStore = createStore({
 	draft: { title: '', prompt: '' },
 	/** The id of the task being edited inline, or null. */
 	editingId: null,
+	/**
+	 * The text of the inline edit in progress, or null when it is untouched.
+	 *
+	 * It lives here rather than in the card's own state for the same reason the
+	 * composer's draft does: the page is remounted whenever the shell rebuilds the
+	 * conversation view list, which a task starting a session is enough to cause.
+	 * Local state would be thrown away by that remount while `editingId` survived
+	 * it, so the editor would reopen holding the *old* text — looking exactly like
+	 * the page had reset what the user was halfway through typing.
+	 */
+	editDraft: null,
 	/** The settings form's uncommitted values, or null while it is untouched. */
 	settingsDraft: null,
 	/** Whether the archive-clear button is armed and waiting for a second click. */

@@ -68,6 +68,12 @@ function makeReact() {
 /** Load the bundle and hand back its registered factory. */
 function loadBundle() {
 	let registration = null;
+	/** Poll callbacks the page armed, so a test can fire one on demand. */
+	const polls = [];
+	// The page polls while it is on screen. The callback is kept so a test can
+	// fire a poll on demand: a refresh landing mid-edit is exactly the situation
+	// that must not disturb what the user has typed, and nothing else can drive
+	// it from the outside.
 	const context = {
 		window: {
 			__ModuleLoader__: {
@@ -75,7 +81,10 @@ function loadBundle() {
 					registration = entry;
 				},
 			},
-			setInterval: () => 0,
+			setInterval: (callback) => {
+				polls.push(callback);
+				return polls.length;
+			},
 			clearInterval: () => {},
 			innerWidth: 1440,
 			innerHeight: 900,
@@ -108,18 +117,18 @@ function loadBundle() {
 	runInNewContext(bundle, context, { filename: 'client.js' });
 	assert.ok(registration !== null, 'client.js must register a factory via window.__ModuleLoader__.load');
 	assert.equal(registration.id, 'dsh-plugin-task-queue', 'the bundle id must equal the package name');
-	return registration;
+	return { registration, polls };
 }
 
 /** The module the factory produces. */
 function loadModule() {
-	const registration = loadBundle();
+	const { registration, polls } = loadBundle();
 	const react = makeReact();
 	const require = (spec) => {
 		if (spec === 'react') return react;
 		throw new Error(`unexpected require("${spec}")`);
 	};
-	return { module: registration.factory(require), react };
+	return { module: registration.factory(require), react, polls };
 }
 
 /** A client context stub that records what the plugin registers. */
@@ -276,7 +285,7 @@ function makeTranslator(dict) {
  * entry itself is the whole surface, and rendering it is what a user sees.
  */
 async function setup(state = snapshot()) {
-	const { module } = loadModule();
+	const { module, polls } = loadModule();
 	const ctx = makeCtx();
 	const calls = installFetch(state);
 	module.apply(ctx);
@@ -294,7 +303,13 @@ async function setup(state = snapshot()) {
 	// host. Render once and let that read land, so every caller sees a loaded page.
 	page();
 	await new Promise((resolve) => setImmediate(resolve));
-	return { module, ctx, calls, dicts, view, t, page, injected };
+	/** Fire the page's own poll, and let the read it starts land. */
+	const poll = async () => {
+		assert.ok(polls.length > 0, 'the page armed a poll');
+		for (const callback of polls) callback();
+		await new Promise((resolve) => setImmediate(resolve));
+	};
+	return { module, ctx, calls, dicts, view, t, page, injected, poll };
 }
 
 /** Click the first element matching a predicate, then let the call settle. */
@@ -314,6 +329,16 @@ function labelled(element, text) {
 
 /** The settings tab, selected by its visible label. */
 const settingsTab = (element) => element.props.className === 'tq-tab' && labelled(element, '设置');
+
+/**
+ * The inline edit control on a card.
+ *
+ * It is an icon button, so its label is in `aria-label`/`title` rather than in
+ * its children — matching on the accessible name is what a user's screen reader
+ * would do, and it is the only name the button has.
+ */
+const editButton = () => (element) =>
+	typeof element.props.onClick === 'function' && element.props['aria-label'] === '编辑';
 
 /** The footer's save button: the last primary button on the page. */
 const saveButton = (element) => element.props.className === 'tq-btn tq-btn-primary';
@@ -788,4 +813,133 @@ test('a session with no workspace says so instead of showing an empty queue', as
 	const texts = render(page()).texts.join(' | ');
 	assert.match(texts, /没有归属任何工作区/, 'the page explains the problem');
 	assert.doesNotMatch(texts, /队列是空的/, 'and does not pretend the queue is simply empty');
+});
+
+test('a poll landing mid-edit does not disturb the composer', async () => {
+	// A running task is refreshed from the host every five seconds, so the poll
+	// lands while the user is typing. What they have typed is theirs, and a read
+	// of the queue must never be what takes it away.
+	const state = snapshot();
+	state.tasks[0].status = 'running';
+	const { page, poll } = await setup(state);
+
+	const textarea = findAll(page(), (element) => element.type === 'textarea')[0];
+	textarea.props.onChange({ target: { value: '把日志清理干净' } });
+	assert.equal(
+		findAll(page(), (element) => element.type === 'textarea')[0].props.value,
+		'把日志清理干净',
+		'the draft is on screen',
+	);
+
+	await poll();
+
+	assert.equal(
+		findAll(page(), (element) => element.type === 'textarea')[0].props.value,
+		'把日志清理干净',
+		'and the poll leaves it alone',
+	);
+});
+
+test('a poll landing mid-edit does not disturb the settings form', async () => {
+	const state = snapshot();
+	state.tasks[0].status = 'running';
+	const { page, poll } = await setup(state);
+
+	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '设置'));
+
+	const cooldown = findAll(page(), (element) => element.props.id === 'tq-cooldown')[0];
+	cooldown.props.onChange({ target: { value: '45' } });
+	assert.equal(
+		findAll(page(), (element) => element.props.id === 'tq-cooldown')[0].props.value,
+		45,
+		'the new interval is in the form',
+	);
+
+	await poll();
+
+	assert.equal(
+		findAll(page(), (element) => element.props.id === 'tq-cooldown')[0].props.value,
+		45,
+		'and the poll does not reset it to what the host still has',
+	);
+});
+
+test('a poll does not throw the user off the face they are on', async () => {
+	const state = snapshot();
+	state.tasks[0].status = 'running';
+	const { page, poll } = await setup(state);
+
+	await click(page(), (element) => element.props.className === 'tq-tab' && labelled(element, '设置'));
+	await poll();
+
+	const texts = render(page()).texts.join(' | ');
+	assert.ok(texts.includes('执行间隔'), 'the settings face is still the one showing after a refresh');
+});
+
+test('a half-finished inline edit survives a poll', async () => {
+	// The reported bug: with a task running, the page pulls a fresh snapshot every
+	// five seconds and that read must not reach into the field the user is typing
+	// in. The draft is the store's for exactly this reason.
+	const state = snapshot();
+	state.tasks[0].status = 'running';
+	const { page, poll } = await setup(state);
+
+	await click(page(), editButton());
+	const edited = () => {
+		const areas = findAll(page(), (element) => element.type === 'textarea');
+		return areas[areas.length - 1];
+	};
+	edited().props.onChange({ target: { value: '只改了一半的内容' } });
+	assert.equal(edited().props.value, '只改了一半的内容', 'the edit is in the field');
+
+	await poll();
+
+	assert.equal(edited().props.value, '只改了一半的内容', 'and the poll did not take it away');
+});
+
+test('a half-finished inline edit survives the page being remounted', async () => {
+	// A task starting a session can make the shell rebuild the view list, which
+	// remounts this page. Nothing the user has typed lives in component state, so
+	// a remount is invisible to them — which is the point.
+	const state = snapshot();
+	state.tasks[0].status = 'running';
+	const { page } = await setup(state);
+
+	await click(page(), editButton());
+	const areas = () => findAll(page(), (element) => element.type === 'textarea');
+	areas()[areas().length - 1].props.onChange({ target: { value: '重挂载也不该丢' } });
+
+	// Render again from scratch, as a remount does.
+	const after = findAll(page(), (element) => element.type === 'textarea');
+	assert.equal(after[after.length - 1].props.value, '重挂载也不该丢', 'the edit came back with the page');
+});
+
+test('cancelling an edit does not leave its text behind for the next one', async () => {
+	// The draft is cleared when the editor closes, so the next task edited starts
+	// from its own text rather than inheriting the abandoned one.
+	const state = snapshot();
+	const { page } = await setup(state);
+
+	await click(page(), editButton());
+	const areas = () => findAll(page(), (element) => element.type === 'textarea');
+	areas()[areas().length - 1].props.onChange({ target: { value: '放弃掉的草稿' } });
+	await click(page(), action('取消'));
+
+	// Relative to the task's own text, so the store holds no draft of its own.
+	assert.equal(areas()[areas().length - 1].props.value, '', 'the composer is the only area left');
+});
+
+test('the settings draft is seeded once and then owns the form', async () => {
+	// The first edit seeds the draft from the host; afterwards the draft is the
+	// truth for the form, so a poll landing mid-edit cannot pull a field back to
+	// the value the host still has.
+	const { page, poll } = await setup();
+	await click(page(), settingsTab);
+
+	const cooldown = () => findAll(page(), (element) => element.props.id === 'tq-cooldown')[0];
+	cooldown().props.onChange({ target: { value: '45' } });
+	await poll();
+	cooldown().props.onChange({ target: { value: '50' } });
+
+	assert.equal(cooldown().props.value, 50, 'the second edit built on the first, not on the host value');
 });
