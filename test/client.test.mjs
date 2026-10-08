@@ -645,6 +645,29 @@ test('archiving completed tasks is one click', async () => {
 	assert.equal(posted.method, 'POST');
 });
 
+test('the bulk archive button sits above the task list, not below it', async () => {
+	// It acts on the list as a whole, so it belongs where the list starts. Below
+	// the last card it is a control you have to scroll past every task to reach,
+	// which is backwards on a queue that is read top-down.
+	const { page } = await setup();
+	const elements = render(page()).elements;
+
+	const button = elements.findIndex((element) => action('归档已完成')(element));
+	// Cards carry `tq-card tq-card-<status>`, so this matches the class as a word
+	// rather than as the whole attribute.
+	const firstCard = elements.findIndex((element) =>
+		String(element.props.className ?? '')
+			.split(' ')
+			.includes('tq-card'),
+	);
+	const composer = elements.findIndex((element) => element.type === 'form');
+
+	assert.ok(button !== -1, 'the archive button is on the queue face');
+	assert.ok(firstCard !== -1, 'the queue face has cards to archive');
+	assert.ok(button < firstCard, 'and the button comes before the first card');
+	assert.ok(button > composer, 'but after the composer, which is what creates tasks');
+});
+
 test('clearing the archive asks first, and only then deletes', async () => {
 	// The one irreversible bulk action: the first click arms it, the second
 	// confirms. "One click" is not worth losing history over.

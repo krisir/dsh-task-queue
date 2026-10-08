@@ -93,6 +93,10 @@ still decisions you have to make — retry or delete — and hiding them would t
 that decision away without asking. An archived task holds no place in the line and
 is never claimed.
 
+It sits **above** the task list, next to the composer, because it acts on the list
+as a whole. Below the last card it would be a control you have to scroll past every
+task to reach, which is backwards on a queue that is read top-down.
+
 It is reversible: each archived card has **移回队列**. The one irreversible action
 is `清空归档`, so it arms on the first click and deletes on the second, and says
 what it is about to do in between. "One click" a few pixels from the search field
@@ -416,7 +420,7 @@ asserts the page installs no pointer-capturing gesture at all.
 
 ```sh
 node build.mjs      # regenerate client.js
-node --test test/   # 164 tests, no dependencies to install
+node --test test/   # 165 tests, no dependencies to install
 ```
 
 The suite covers the window arithmetic (the midnight wrap, the exclusive end

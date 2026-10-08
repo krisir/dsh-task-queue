@@ -125,6 +125,25 @@ function QueueView({ t, sessionId, snapshot }) {
 			: null,
 		h('h3', { className: 'tq-section-title' }, t('queue.addTitle')),
 		h(TaskComposer, { t, sessionId }),
+		// The bulk action sits *above* the list, not below it. It acts on the list
+		// as a whole, and a control that only appears after the last card is a
+		// control you have to scroll to find — which is exactly backwards on a
+		// queue that is meant to be read top-down.
+		tasks.length === 0
+			? null
+			: h(
+					'div',
+					{ className: 'tq-row tq-bulk' },
+					h(BulkAction, {
+						t,
+						label: t('queue.archiveDone'),
+						confirmLabel: t('queue.archiveDone'),
+						count: done,
+						armed: false,
+						disabled: busy === 'global',
+						onClick: () => void mutate(sessionId, 'global', () => api.archiveCompleted(sessionId)),
+					}),
+				),
 		tasks.length === 0
 			? h('div', { className: 'tq-empty' }, t('queue.empty'))
 			: tasks.map((task, index) =>
@@ -139,19 +158,6 @@ function QueueView({ t, sessionId, snapshot }) {
 						isLast: index === tasks.length - 1,
 					}),
 				),
-		h(
-			'div',
-			{ className: 'tq-row-end tq-row tq-bulk' },
-			h(BulkAction, {
-				t,
-				label: t('queue.archiveDone'),
-				confirmLabel: t('queue.archiveDone'),
-				count: done,
-				armed: false,
-				disabled: busy === 'global',
-				onClick: () => void mutate(sessionId, 'global', () => api.archiveCompleted(sessionId)),
-			}),
-		),
 	);
 }
 

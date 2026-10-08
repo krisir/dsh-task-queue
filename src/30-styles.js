@@ -379,8 +379,10 @@ const STYLES = `
 .tq-toggle input { margin: 2px 0 0; flex: 0 0 auto; }
 .tq-toggle-text { display: flex; flex-direction: column; gap: 1px; }
 
-/* Bulk actions sit at the end of a face, where a destructive one is not next to
-   anything else you might be reaching for. */
+/* Bulk actions are kept clear of whatever sits beside them: a destructive one
+   should not be flush against a card's own controls. The queue face puts this
+   row above its list, the archive face below — the shared margin is the gap,
+   and each face supplies its own separation. */
 .tq-bulk { margin-top: 4px; }
 
 .tq-btn-armed {
