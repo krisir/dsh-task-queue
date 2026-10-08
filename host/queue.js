@@ -251,6 +251,28 @@ export function runningCount(state, workspaceId) {
 }
 
 /**
+ * How many tasks one workspace has already run in the current batch.
+ *
+ * A finished task still sitting in the list is the thing that makes the next
+ * queued task a *successor* rather than a *starter*. Once every finished task
+ * has been archived or deleted, the queue holds no history and the next task to
+ * arrive begins a fresh run — which is exactly when the interval must not apply.
+ *
+ * @param {object} state - queue document.
+ * @param {string} workspaceId - the workspace.
+ * @returns {number} how many of its tasks have run and are still listed.
+ */
+export function settledCount(state, workspaceId) {
+	let count = 0;
+	for (const task of state.tasks) {
+		if (task.workspaceId !== workspaceId) continue;
+		if (task.archivedAt !== undefined) continue;
+		if (task.status === TASK_STATUS.done || task.status === TASK_STATUS.failed) count += 1;
+	}
+	return count;
+}
+
+/**
  * Apply a settings patch to one workspace.
  *
  * The patch is sanitized *before* it is merged, not after. Merging first and
@@ -306,21 +328,35 @@ export function markWorkspaceFinished(state, workspaceId, at, seed) {
 /**
  * How long until one workspace may start its next task, or 0 when it may now.
  *
- * The wait only applies between tasks: a workspace that has never finished one
- * has nothing to wait for, and a task already running is not what the cooldown
- * paces.
+ * The wait only applies **between two tasks of a batch**. It paces a run of work
+ * out; it is not a lock on the queue. So a task that *starts* a run waits for
+ * nothing, even when `lastFinishedAt` still sits inside the interval — which
+ * happens whenever a batch ended recently and a new one is being assembled,
+ * since that anchor is durable per-workspace state and is deliberately not
+ * cleared when the queue drains.
+ *
+ * The distinction is whether the task has a *predecessor*: a finished task still
+ * listed ahead of it. With one, it follows another and waits its turn; without
+ * one, it opens the run and must not be paced. Reading the list rather than a
+ * counter is what makes the rule survive archiving — filing finished tasks away
+ * leaves the queue with no history, and the next task to arrive then starts
+ * immediately instead of inheriting a gap from a batch that is over.
  *
  * @param {object} options - the question.
  * @param {number} options.now - the current instant.
  * @param {object} options.settings - the workspace's settings.
  * @param {number | undefined} options.lastFinishedAt - when it last finished.
  * @param {number} options.running - how many of its tasks are running.
+ * @param {number} [options.settled=0] - how many of its tasks have already run.
  * @returns {number} milliseconds still to wait, 0 when none.
  */
-export function cooldownRemaining({ now, settings, lastFinishedAt, running }) {
+export function cooldownRemaining({ now, settings, lastFinishedAt, running, settled = 0 }) {
 	const minutes = Number(settings.cooldownMinutes);
 	if (!Number.isFinite(minutes) || minutes <= 0) return 0;
 	if (running > 0) return 0;
+	// Nothing has run ahead of it in this batch, so this task opens the run. Its
+	// start is not a gap between tasks and must not be paced.
+	if (settled <= 0) return 0;
 	if (!Number.isFinite(lastFinishedAt)) return 0;
 	return Math.max(0, Number(lastFinishedAt) + minutes * 60_000 - now);
 }

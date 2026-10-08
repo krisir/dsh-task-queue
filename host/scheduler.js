@@ -25,7 +25,7 @@
  * @module dsh-task-queue/scheduler
  */
 
-import { cooldownRemaining, nextQueued, runningCount } from './queue.js';
+import { cooldownRemaining, nextQueued, runningCount, settledCount } from './queue.js';
 import { isOpen, nextBoundary } from './window.js';
 
 /**
@@ -226,6 +226,7 @@ export class Scheduler {
 			settings: this.store.settingsFor(workspaceId),
 			lastFinishedAt: this.store.lastFinishedAt(workspaceId),
 			running: runningCount(this.store.state, workspaceId),
+			settled: settledCount(this.store.state, workspaceId),
 		});
 	}
 

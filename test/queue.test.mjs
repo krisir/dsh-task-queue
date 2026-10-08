@@ -16,6 +16,7 @@ import {
 	archiveCompleted,
 	cancelTask,
 	clearArchived,
+	cooldownRemaining,
 	createTask,
 	deleteTask,
 	findTask,
@@ -24,6 +25,7 @@ import {
 	reorderTasks,
 	retryTask,
 	runningCount,
+	settledCount,
 	unarchiveTask,
 	updateTask,
 } from '../host/queue.js';
@@ -344,4 +346,52 @@ test('a new task lands at the back even after a reorder', () => {
 	const third = createTask(state, WS, { prompt: 'c' });
 	assert.equal(nextQueued(state, WS).id, second.id);
 	assert.ok(third.seq > second.seq && third.seq > first.seq);
+});
+
+test('settledCount counts what has run and is still listed', () => {
+	const state = emptyState();
+	const done = createTask(state, WS, { prompt: 'done' });
+	createTask(state, WS, { prompt: 'waiting' });
+	done.status = TASK_STATUS.done;
+	assert.equal(settledCount(state, WS), 1, 'the finished task is history');
+
+	// Filing it away empties the queue of history, which is what lets the next
+	// task start a fresh run instead of inheriting a stale gap.
+	archiveCompleted(state, WS, 1000);
+	assert.equal(settledCount(state, WS), 0, 'archived tasks are not history any more');
+	assert.equal(settledCount(state, 'other-workspace'), 0, 'and the count is per workspace');
+});
+
+test('the interval paces a successor but never the task that opens a run', () => {
+	const now = Date.parse('2025-01-01T20:00:00Z');
+	const settings = { cooldownMinutes: 30 };
+	const lastFinishedAt = now - 60_000; // the previous task closed a minute ago
+
+	const wait = (settled) => cooldownRemaining({ now, settings, lastFinishedAt, running: 0, settled });
+
+	// The reported bug: nothing has run ahead of it, so its start is not a gap
+	// between tasks — even though the durable anchor is still inside the interval.
+	assert.equal(wait(0), 0, 'a task with no predecessor starts at once');
+	assert.equal(wait(1), 29 * 60_000, 'a task behind a finished one waits out the interval');
+
+	// Already running work is not what the pacing delays.
+	assert.equal(
+		cooldownRemaining({ now, settings, lastFinishedAt, running: 1, settled: 1 }),
+		0,
+		'a running task is not paced',
+	);
+
+	// The anchor has to exist for there to be a gap at all.
+	assert.equal(
+		cooldownRemaining({ now, settings, lastFinishedAt: undefined, running: 0, settled: 1 }),
+		0,
+		'no anchor means nothing to wait for',
+	);
+
+	// An interval of zero is the switch that turns the whole thing off.
+	assert.equal(
+		cooldownRemaining({ now, settings: { cooldownMinutes: 0 }, lastFinishedAt, running: 0, settled: 1 }),
+		0,
+		'zero paces nothing',
+	);
 });

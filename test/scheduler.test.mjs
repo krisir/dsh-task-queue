@@ -17,7 +17,7 @@ import { test } from 'node:test';
 
 import { Scheduler } from '../host/scheduler.js';
 import { TaskStore, TASK_STATUS, normalizeWorkspaceSettings } from '../host/state.js';
-import { createTask } from '../host/queue.js';
+import { archiveCompleted, createTask } from '../host/queue.js';
 
 /** 18:00 in Asia/Shanghai, the first minute the window is open. */
 const OPEN = Date.parse('2025-01-01T10:00:00Z');
@@ -314,6 +314,48 @@ test('a workspace that has never finished a task does not wait', async () => {
 	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
 	await scheduler.tick();
 	assert.deepEqual(dispatcher.dispatched, ['a'], 'nothing to wait for before the first task');
+});
+
+test('the interval never holds back the first task of a new batch', async () => {
+	// The reported bug: a batch finished inside the interval, its tasks were
+	// archived, and a new task was queued. The anchor is durable per-workspace
+	// state, so it outlives the batch that wrote it — and the fresh task then sat
+	// there, blocked by a gap that belonged to work already over.
+	//
+	// The interval is "between two tasks", so a task with nothing finished ahead
+	// of it in the list opens the run and must start at once.
+	const store = buildStore([], { cooldownMinutes: 30 });
+	store.mutate((state) => {
+		createTask(state, WS, { prompt: 'the one task in a fresh batch' });
+		// A finished batch that has since been archived away, leaving only the
+		// anchor behind. Files one minute ago, so the interval is still running.
+		state.workspaces[WS].lastFinishedAt = OPEN - 60 * 1000;
+	});
+	const dispatcher = buildDispatcher(store);
+	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
+
+	await scheduler.tick();
+	assert.deepEqual(dispatcher.dispatched, ['the one task in a fresh batch'], 'it runs without waiting');
+	assert.equal(scheduler.cooldownRemaining(WS), 0, 'and no wait is reported for it');
+});
+
+test('archiving the finished tasks releases the interval for what comes next', async () => {
+	// The same defect through the page's own path: filing finished work away
+	// leaves the queue with no history, so a task queued afterwards starts the run
+	// rather than inheriting the gap.
+	const store = buildStore([], { cooldownMinutes: 30 });
+	store.mutate((state) => {
+		createTask(state, WS, { prompt: 'yesterday' });
+		createTask(state, WS, { prompt: 'today' });
+		state.tasks[0].status = TASK_STATUS.done;
+		state.workspaces[WS].lastFinishedAt = OPEN - 60 * 1000;
+		archiveCompleted(state, WS, OPEN);
+	});
+	const dispatcher = buildDispatcher(store);
+	const { scheduler } = buildScheduler(store, dispatcher, OPEN);
+
+	await scheduler.tick();
+	assert.deepEqual(dispatcher.dispatched, ['today'], 'the new batch starts immediately');
 });
 
 test('the interval does not hold back a task that is already running', async () => {

@@ -110,9 +110,14 @@ measured from a per-workspace anchor written in the same commit as the finish, s
 deleting a finished task cannot silently cut a pause short, and the status line
 counts the wait down — a queue that has gone quiet should say why.
 
-The interval never delays the **first** task (there is nothing to wait for) and
-never applies to a task already running. The **执行** button ignores it, exactly
-as it ignores the window.
+It is a gap **between two tasks**, not a delay before the queue may act. A task
+with nothing finished ahead of it in the list opens the run and starts at once,
+even when the anchor is still inside the interval — which is the normal case when
+one batch has just been archived and the next task arrives. Plainly: the first
+task of a batch never waits.
+
+The interval never applies to a task already running. The **执行** button ignores
+it, exactly as it ignores the window.
 
 ### One task at a time
 
@@ -420,7 +425,7 @@ asserts the page installs no pointer-capturing gesture at all.
 
 ```sh
 node build.mjs      # regenerate client.js
-node --test test/   # 165 tests, no dependencies to install
+node --test test/   # 169 tests, no dependencies to install
 ```
 
 The suite covers the window arithmetic (the midnight wrap, the exclusive end
