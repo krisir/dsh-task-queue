@@ -1,0 +1,1161 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>dsh-plugin-task-queue — DeepSeek Harness 时间窗限定的任务队列</title>
+<meta name="description" content="dsh-plugin-task-queue 是 DeepSeek Harness (DSH) 的第三方插件：白天把任务攒成卡片，等到设定的时间窗（例如 18:00–07:00）打开，队列自动逐条领取并在无人值守的深夜里执行。">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#0b0f17" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#f6f8fc" media="(prefers-color-scheme: light)">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="dsh-plugin-task-queue">
+<meta property="og:title" content="dsh-plugin-task-queue — 时间窗限定的任务队列">
+<meta property="og:description" content="白天把任务攒成卡片，等到 18:00–07:00 这类时间窗打开，队列自动逐条领取并交给会话执行，夜里无人值守地干活。">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:url" content="https://github.com/krisir/dsh-task-queue">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="dsh-plugin-task-queue — 时间窗限定的任务队列">
+<meta name="twitter:description" content="DeepSeek Harness 的时间窗限定的任务队列插件：白天攒卡片，夜里无人值守地跑。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27%20viewBox%3D%270%200%2032%2032%27%3E%3Crect%20width%3D%2732%27%20height%3D%2732%27%20rx%3D%278%27%20fill%3D%27%234f7cff%27%2F%3E%3Cpath%20d%3D%27M10%2011h12M10%2016h12M10%2021h7%27%20stroke%3D%27white%27%20stroke-width%3D%272.4%27%20stroke-linecap%3D%27round%27%2F%3E%3C%2Fsvg%3E">
+<style>
+  /* ---------- 设计令牌 ---------- */
+  :root {
+    --bg: #0b0f17;
+    --bg-soft: #0f1420;
+    --surface: #131a28;
+    --surface-2: #182134;
+    --border: #253049;
+    --border-soft: #1c2537;
+    --text: #e8edf7;
+    --text-dim: #a3b0c7;
+    --text-faint: #7d8ba3;
+    --accent: #6f9bff;
+    --accent-2: #9d7bff;
+    /* Solid button fill is deliberately darker than --accent so white 15px
+       label text clears WCAG AA (4.5:1); --accent stays bright for text/links
+       on the dark page background. */
+    --accent-solid: #2f5fd8;
+    --accent-solid-2: #6d45d9;
+    --accent-ink: #08122b;
+    --ok: #43d19e;
+    --warn: #ffc857;
+    --danger: #ff6b6b;
+    --code-bg: #0a0e16;
+    --shadow: 0 18px 50px -22px rgba(0, 0, 0, .85);
+    --shadow-sm: 0 6px 18px -10px rgba(0, 0, 0, .8);
+    --ring: 0 0 0 3px rgba(111, 155, 255, .45);
+    --radius: 16px;
+    --radius-sm: 10px;
+    --maxw: 1120px;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
+            "Microsoft YaHei", "Noto Sans SC", "Source Han Sans SC", sans-serif;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fc;
+      --bg-soft: #eef2f9;
+      --surface: #ffffff;
+      --surface-2: #f4f7fd;
+      --border: #d7deeb;
+      --border-soft: #e4e9f3;
+      --text: #131a28;
+      --text-dim: #4d5a70;
+      --text-faint: #5c6a7d;
+      --accent: #2f5fd8;
+      --accent-2: #6d45d9;
+      --accent-solid: #2f5fd8;
+      --accent-solid-2: #6d45d9;
+      --accent-ink: #ffffff;
+      --ok: #0f7a56;
+      --warn: #93640a;
+      --danger: #c62828;
+      --code-bg: #0f1420;
+      --shadow: 0 18px 50px -26px rgba(20, 35, 70, .35);
+      --shadow-sm: 0 6px 18px -12px rgba(20, 35, 70, .3);
+      --ring: 0 0 0 3px rgba(47, 95, 216, .35);
+    }
+  }
+
+  /* ---------- 基础 ---------- */
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 16px;
+    line-height: 1.75;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  img, svg { max-width: 100%; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3, h4 { line-height: 1.3; margin: 0 0 .5em; font-weight: 700; letter-spacing: -.01em; }
+  p { margin: 0 0 1em; }
+  ul, ol { margin: 0 0 1em; padding-left: 1.35em; }
+  li { margin-bottom: .45em; }
+  code, kbd, pre { font-family: var(--mono); font-size: .9em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  .skip-link {
+    position: absolute; left: -9999px; top: 0; z-index: 100;
+    background: var(--accent); color: var(--accent-ink);
+    padding: .7em 1.1em; border-radius: 0 0 var(--radius-sm) 0; font-weight: 600;
+  }
+  .skip-link:focus { left: 0; }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; margin: -1px;
+    padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+  }
+
+  .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding: 0 22px; }
+
+  /* ---------- 顶栏 ---------- */
+  .topbar {
+    position: sticky; top: 0; z-index: 50;
+    background: color-mix(in srgb, var(--bg) 86%, transparent);
+    backdrop-filter: saturate(160%) blur(12px);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .topbar__inner {
+    display: flex; align-items: center; gap: 18px;
+    min-height: 60px; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); }
+  .brand:hover { text-decoration: none; }
+  .brand__mark {
+    width: 26px; height: 26px; border-radius: 8px; flex: none;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    display: grid; place-items: center; color: #fff; font-size: 14px; font-weight: 800;
+  }
+  .brand__name { font-size: 15px; }
+  .navlinks { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .navlinks a {
+    color: var(--text-dim); font-size: 14.5px; padding: 6px 10px; border-radius: 8px;
+  }
+  .navlinks a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
+  @media (max-width: 860px) { .navlinks { display: none; } }
+
+  /* ---------- 按钮 ---------- */
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px; justify-content: center;
+    font: inherit; font-size: 15px; font-weight: 600; line-height: 1;
+    padding: 13px 20px; border-radius: 12px; cursor: pointer;
+    border: 1px solid transparent; background: var(--surface-2); color: var(--text);
+    transition: transform .12s ease, background .15s ease, border-color .15s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn:active { transform: translateY(0); }
+  .btn--primary {
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent-solid-2));
+    color: #fff; box-shadow: var(--shadow-sm);
+  }
+  .btn--ghost { background: transparent; border-color: var(--border); color: var(--text); }
+  .btn--ghost:hover { background: var(--surface); }
+  .btn--sm { padding: 8px 14px; font-size: 13.5px; border-radius: 10px; }
+  @media (prefers-color-scheme: light) {
+    .btn--primary { color: #fff; }
+  }
+
+  /* ---------- hero ---------- */
+  .hero { position: relative; overflow: hidden; padding: 74px 0 62px; }
+  .hero::before {
+    content: ""; position: absolute; inset: -30% -10% auto -10%; height: 620px;
+    background:
+      radial-gradient(46% 60% at 22% 34%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%),
+      radial-gradient(40% 56% at 82% 12%, color-mix(in srgb, var(--accent-2) 26%, transparent), transparent 72%);
+    filter: blur(10px); pointer-events: none;
+  }
+  .hero__inner { position: relative; }
+  .hero__eyebrow {
+    display: inline-flex; align-items: center; gap: 8px;
+    border: 1px solid var(--border); background: var(--surface);
+    color: var(--text-dim); border-radius: 999px; padding: 6px 14px;
+    font-size: 13.5px; font-weight: 600; margin-bottom: 22px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); flex: none; }
+  .hero h1 {
+    font-size: clamp(2.05rem, 5.6vw, 3.5rem); margin-bottom: 16px; letter-spacing: -.02em;
+  }
+  .hero h1 .grad {
+    background: linear-gradient(120deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .hero__lead {
+    font-size: clamp(1.02rem, 2.1vw, 1.2rem); color: var(--text-dim);
+    max-width: 63ch; margin-bottom: 12px;
+  }
+  .hero__lead strong { color: var(--text); }
+  .hero__actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 28px; }
+  .hero__meta {
+    display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 26px;
+    color: var(--text-faint); font-size: 14px;
+  }
+  .hero__meta span { display: inline-flex; align-items: center; gap: 7px; }
+
+  /* ---------- 章节 ---------- */
+  section { padding: 62px 0; }
+  section + section { border-top: 1px solid var(--border-soft); }
+  .section__head { max-width: 66ch; margin-bottom: 34px; }
+  .section__kicker {
+    text-transform: uppercase; letter-spacing: .14em; font-size: 12px;
+    font-weight: 700; color: var(--accent); margin-bottom: 10px;
+  }
+  .section__head h2 { font-size: clamp(1.5rem, 3.4vw, 2rem); }
+  .section__head p { color: var(--text-dim); margin-bottom: 0; }
+
+  /* ---------- 卡片网格 ---------- */
+  .grid { display: grid; gap: 16px; }
+  .grid--3 { grid-template-columns: repeat(auto-fit, minmax(288px, 1fr)); }
+  .grid--2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: var(--radius); padding: 22px; box-shadow: var(--shadow-sm);
+  }
+  .card h3 { font-size: 1.06rem; display: flex; align-items: center; gap: 10px; margin-bottom: .45em; }
+  .card p { color: var(--text-dim); margin-bottom: 0; font-size: 15px; }
+  .card p + p { margin-top: .7em; }
+  .card__icon {
+    width: 34px; height: 34px; border-radius: 10px; flex: none;
+    display: grid; place-items: center; font-size: 17px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+  .card code { background: var(--surface-2); padding: .12em .42em; border-radius: 6px; }
+
+  /* ---------- 时间窗图示 ---------- */
+  .windows { display: grid; gap: 12px; }
+  .window-row {
+    display: grid; gap: 6px 16px; align-items: center;
+    grid-template-columns: 148px 1fr 220px;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm); padding: 14px 18px;
+  }
+  .window-row__label { font-weight: 600; font-size: 15px; }
+  .window-row__label code { font-size: 14px; color: var(--accent); }
+  .window-row__why { color: var(--text-dim); font-size: 14.5px; }
+  .window-row__bar {
+    position: relative; height: 10px; border-radius: 99px;
+    background: var(--surface-2); overflow: hidden; border: 1px solid var(--border-soft);
+  }
+  .window-row__bar span {
+    position: absolute; top: 0; bottom: 0; border-radius: 99px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+  @media (max-width: 780px) {
+    .window-row { grid-template-columns: 1fr; }
+    .window-row__why { order: 3; }
+  }
+
+  /* ---------- 界面 mock ---------- */
+  .mock-frame {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: var(--bg-soft); box-shadow: var(--shadow); overflow: hidden;
+  }
+  .mock-chrome {
+    display: flex; align-items: center; gap: 8px;
+    padding: 11px 16px; border-bottom: 1px solid var(--border-soft);
+    background: var(--surface);
+  }
+  .mock-chrome__dot { width: 10px; height: 10px; border-radius: 50%; background: var(--border); }
+  .mock-chrome__title { margin-left: 8px; font-size: 13px; color: var(--text-faint); }
+  .mock-body { padding: 18px; }
+  .mock-tabs {
+    display: inline-flex; gap: 4px; padding: 4px; border-radius: 12px;
+    background: var(--surface-2); border: 1px solid var(--border-soft); margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .mock-tab {
+    padding: 7px 15px; border-radius: 9px; font-size: 14px; font-weight: 600; color: var(--text-dim);
+  }
+  .mock-tab--active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
+  .mock-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+  }
+  .mock-chip {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 13px;
+    border: 1px solid var(--border-soft); background: var(--surface);
+    border-radius: 999px; padding: 5px 12px; color: var(--text-dim);
+  }
+  .mock-chip--open { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
+  .mock-chip--closed { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+  .mock-list { display: grid; gap: 10px; }
+  .mock-task {
+    display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: 12px; padding: 12px 14px;
+  }
+  .mock-task--running { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .mock-task--done { opacity: .78; }
+  .mock-task__state { font-size: 16px; width: 22px; text-align: center; }
+  .mock-task__title { font-size: 14.6px; font-weight: 600; }
+  .mock-task__meta { font-size: 12.6px; color: var(--text-faint); margin-top: 2px; }
+  .mock-task__acts { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+  .mock-act {
+    width: 28px; height: 28px; display: grid; place-items: center;
+    border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border-soft);
+    font-size: 13px; color: var(--text-dim);
+  }
+  .mock-act--run { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 42%, transparent); }
+  .mock-act--del { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 38%, transparent); }
+  .mock-note {
+    margin-top: 16px; font-size: 13.5px; color: var(--text-faint);
+    display: flex; align-items: flex-start; gap: 8px;
+  }
+  .mock-legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  @media (max-width: 560px) {
+    .mock-task { grid-template-columns: auto 1fr; }
+    .mock-task__acts { grid-column: 1 / -1; justify-content: flex-start; }
+  }
+
+  /* ---------- 代码块 ---------- */
+  .code {
+    position: relative; background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: var(--radius); overflow: hidden; margin: 0 0 18px;
+  }
+  .code__head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 9px 14px; border-bottom: 1px solid #1d2637; background: #0d1220;
+  }
+  .code__lang { font-size: 12.5px; color: #8595b3; font-family: var(--mono); letter-spacing: .06em; }
+  .copy-btn {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    font: inherit; font-size: 12.6px; font-weight: 600;
+    background: #1a2334; color: #cbd7ee; border: 1px solid #2a3549;
+    border-radius: 8px; padding: 6px 11px;
+  }
+  .copy-btn:hover { background: #223049; }
+  .copy-btn[data-copied="true"] { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 50%, transparent); }
+  .code pre {
+    margin: 0; padding: 16px 18px; overflow-x: auto;
+    color: #dbe6fb; font-size: 14px; line-height: 1.7;
+  }
+  .code pre .cmt { color: #7b8aa6; }
+  .code--plain pre { color: var(--text); background: var(--surface); }
+
+  /* ---------- 表格 ---------- */
+  .table-wrap {
+    overflow-x: auto; border: 1px solid var(--border-soft);
+    border-radius: var(--radius); background: var(--surface);
+  }
+  table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 15px; }
+  caption { text-align: left; color: var(--text-faint); font-size: 14px; padding: 12px 18px 0; }
+  th, td { text-align: left; padding: 12px 18px; border-bottom: 1px solid var(--border-soft); vertical-align: top; }
+  thead th {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--text-faint); background: var(--surface-2); white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr:hover td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  td code, th code { background: var(--surface-2); padding: .12em .42em; border-radius: 6px; white-space: nowrap; }
+  .def { color: var(--accent); font-weight: 600; white-space: nowrap; }
+
+  /* ---------- 风险提示 ---------- */
+  .callout {
+    display: grid; grid-template-columns: auto 1fr; gap: 14px;
+    border-radius: var(--radius); padding: 18px 20px;
+    border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+    background: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  }
+  .callout--info { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 8%, var(--surface)); }
+  .callout--warn { border-color: color-mix(in srgb, var(--warn) 48%, var(--border)); background: color-mix(in srgb, var(--warn) 9%, var(--surface)); }
+  .callout__icon { font-size: 20px; line-height: 1.4; }
+  .callout h3 { margin-bottom: .35em; font-size: 1.02rem; }
+  .callout p:last-child, .callout ul:last-child { margin-bottom: 0; }
+  .callout p, .callout li { color: var(--text-dim); font-size: 15px; }
+  .callout strong { color: var(--text); }
+  .layers { counter-reset: layer; list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 10px; }
+  .layers li {
+    counter-increment: layer; position: relative; padding-left: 40px; margin: 0;
+  }
+  .layers li::before {
+    content: counter(layer); position: absolute; left: 0; top: .15em;
+    width: 26px; height: 26px; border-radius: 8px; display: grid; place-items: center;
+    font-size: 13px; font-weight: 700; font-family: var(--mono);
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent); color: var(--text);
+  }
+
+  /* ---------- FAQ ---------- */
+  .faq { display: grid; gap: 12px; }
+  details {
+    background: var(--surface); border: 1px solid var(--border-soft);
+    border-radius: var(--radius-sm); overflow: hidden;
+  }
+  details[open] { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
+  summary {
+    cursor: pointer; padding: 16px 20px; font-weight: 600; font-size: 15.5px;
+    display: flex; align-items: center; gap: 12px; list-style: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::after {
+    content: "+"; margin-left: auto; font-family: var(--mono); font-size: 19px;
+    color: var(--accent); line-height: 1;
+  }
+  details[open] summary::after { content: "−"; }
+  summary:hover { background: var(--surface-2); }
+  .faq__body { padding: 0 20px 18px; color: var(--text-dim); font-size: 15px; }
+  .faq__body p:last-child, .faq__body ul:last-child { margin-bottom: 0; }
+  .faq__body code { background: var(--surface-2); padding: .12em .42em; border-radius: 6px; }
+
+  /* ---------- 步骤 ---------- */
+  .steps { counter-reset: step; list-style: none; padding: 0; display: grid; gap: 14px; margin: 0; }
+  .steps > li { counter-increment: step; position: relative; padding-left: 46px; margin: 0; }
+  .steps > li::before {
+    content: counter(step); position: absolute; left: 0; top: 0;
+    width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+    font-weight: 700; font-size: 14px;
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent-solid-2)); color: #fff;
+  }
+  .steps h3 { font-size: 1.02rem; margin-bottom: .3em; }
+  .steps p { color: var(--text-dim); font-size: 15px; }
+
+  /* ---------- 页脚 ---------- */
+  footer {
+    border-top: 1px solid var(--border-soft); background: var(--bg-soft);
+    padding: 42px 0 34px; color: var(--text-dim); font-size: 14.6px;
+  }
+  .footer__grid {
+    display: grid; gap: 26px; grid-template-columns: 1.4fr 1fr 1fr;
+  }
+  @media (max-width: 780px) { .footer__grid { grid-template-columns: 1fr; } }
+  .footer h4 { font-size: 13px; text-transform: uppercase; letter-spacing: .1em; color: var(--text-faint); }
+  .footer ul { list-style: none; padding: 0; margin: 0; }
+  .footer li { margin-bottom: .5em; }
+  .footer__bottom {
+    border-top: 1px solid var(--border-soft); margin-top: 30px; padding-top: 20px;
+    display: flex; flex-wrap: wrap; gap: 10px 20px; justify-content: space-between; align-items: center;
+    font-size: 13.6px; color: var(--text-faint);
+  }
+  .footer__bottom a { color: var(--text-dim); }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    .btn:hover { transform: none; }
+    * { transition: none !important; }
+  }
+
+  /* ---------- 打印 ---------- */
+  @media print {
+    .topbar, .hero__actions, .copy-btn { display: none; }
+    body { background: #fff; color: #000; }
+    section { padding: 20px 0; }
+  }
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">跳到主要内容</a>
+
+<header class="topbar">
+  <div class="wrap topbar__inner">
+    <a class="brand" href="#top">
+      <span class="brand__mark" aria-hidden="true">T</span>
+      <span class="brand__name">dsh-plugin-task-queue</span>
+    </a>
+    <nav class="navlinks" aria-label="页面导航">
+      <a href="#features">特性</a>
+      <a href="#windows">时间窗</a>
+      <a href="#interface">界面</a>
+      <a href="#start">快速开始</a>
+      <a href="#config">配置</a>
+      <a href="#safety">安全</a>
+      <a href="#faq">常见问题</a>
+      <a href="https://github.com/krisir/dsh-task-queue" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main id="main">
+  <!-- ================= HERO ================= -->
+  <div class="hero" id="top">
+    <div class="wrap hero__inner">
+      <p class="hero__eyebrow"><span class="dot" aria-hidden="true"></span> DeepSeek Harness 第三方插件 · MIT</p>
+      <h1>时间窗限定的<span class="grad">任务队列</span></h1>
+      <p class="hero__lead">
+        白天把任务攒成卡片，等到设定的时间窗（例如 <strong>18:00–07:00</strong>）打开，
+        队列自动逐条领取任务、交给会话执行，<strong>夜里无人值守地干活</strong>。
+      </p>
+      <p class="hero__lead">
+        它在 DSH 内置的「对话 / 轨迹」旁边加了第三个页面「任务」。关掉编辑器去睡觉，
+        早上回来，昨晚排的活已经跑完了。
+      </p>
+      <div class="hero__actions">
+        <a class="btn btn--primary" href="https://github.com/krisir/dsh-task-queue" rel="noopener">
+          查看 GitHub 仓库
+        </a>
+        <a class="btn btn--ghost" href="https://github.com/krisir/dsh-task-queue#readme" rel="noopener">
+          阅读中文文档
+        </a>
+      </div>
+      <p class="hero__meta">
+        <span>🧩 纯 JavaScript，零第三方依赖</span>
+        <span>🧪 189 个测试（<code>node --test</code>）</span>
+        <span>🟢 Node &gt;= 18</span>
+        <span>📄 MIT 许可</span>
+      </p>
+    </div>
+  </div>
+
+  <!-- ================= 特性 ================= -->
+  <section id="features">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Features</p>
+        <h2>它解决什么问题</h2>
+        <p>白天想到什么就丢进队列，晚上让它自己跑。下面是这个插件真正做的事情。</p>
+      </div>
+
+      <div class="grid grid--3">
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🕗</span> 时间窗驱动</h3>
+          <p>只有在配置的时间窗内，队列才会领取任务。窗口之外，卡片安静地排队，谁也不动。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🗂️</span> 按工作区隔离</h3>
+          <p>在工作区里建的任务属于该工作区、只在该工作区执行，别的工区看不到。每个项目的队列是独立的。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">1️⃣</span> 同时只跑一个</h3>
+          <p>每个工作区同一时刻只跑一个任务。这是设计如此，不是设置项——避免同一个仓库被两个会话改乱。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">⏱️</span> 按工作区设间隔</h3>
+          <p><code>cooldownMinutes</code> 按工作区设置，<code>0</code> 表示上一个结束后立即开始下一个；批次里第一个任务永不等待。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🌙</span> 跨午夜与全天</h3>
+          <p><code>18:00→07:00</code> 表示跨午夜，<code>18:00→18:00</code> 表示全天。多个窗口任一打开即运行。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🌍</span> 显式时区</h3>
+          <p>时间按显式 IANA 时区解析（如 <code>Asia/Shanghai</code>），笔记本换时区不会悄悄改变窗口。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🙋</span> 无人值守授权</h3>
+          <p><code>autoApprove</code> 打开时，队列驱动的会话不会停下来等人回答授权提示——否则深夜的任务会卡死。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">📦</span> 归档与清理</h3>
+          <p>队列 / 归档 / 设置三个面板。「归档已完成 (N)」一键归档，「清空归档」点两次确认。</p>
+        </article>
+
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">⚡</span> 立即执行</h3>
+          <p>等不及窗口？卡片上的 ▶ 执行会立刻跑这个任务，忽略时间窗与执行间隔。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 时间窗 ================= -->
+  <section id="windows">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Windows</p>
+        <h2>时间窗怎么读</h2>
+        <p>一个工作区可以有多个窗口，<strong>任一窗口打开即可运行</strong>。每个窗口都是某个显式 IANA 时区里的本地时间区间。</p>
+      </div>
+
+      <div class="windows">
+        <div class="window-row">
+          <div class="window-row__label"><code>18:00 → 07:00</code></div>
+          <div class="window-row__bar" role="img" aria-label="时间轴示意：从 18:00 覆盖到次日 07:00"><span style="left:75%;right:0"></span><span style="left:0;right:29%"></span></div>
+          <div class="window-row__why">跨午夜：傍晚开始，次日早上结束。典型的「睡前一挂」窗口。</div>
+        </div>
+        <div class="window-row">
+          <div class="window-row__label"><code>18:00 → 18:00</code></div>
+          <div class="window-row__bar" role="img" aria-label="时间轴示意：覆盖整天"><span style="left:0;right:0"></span></div>
+          <div class="window-row__why">表示全天：起点等于终点，整天都在窗口内。</div>
+        </div>
+        <div class="window-row">
+          <div class="window-row__label"><code>12:00 → 13:00</code></div>
+          <div class="window-row__bar" role="img" aria-label="时间轴示意：中午 12 点到 13 点"><span style="left:50%;right:45.8%"></span></div>
+          <div class="window-row__why">普通同日窗口：起点小于终点，就是当天的这一段。</div>
+        </div>
+        <div class="window-row">
+          <div class="window-row__label">窗口为空</div>
+          <div class="window-row__bar" role="img" aria-label="时间轴示意：没有窗口"><span style="left:0;right:100%"></span></div>
+          <div class="window-row__why">不排期：没有任何窗口打开，队列不领任务（手动 ▶ 执行仍然有效）。</div>
+        </div>
+      </div>
+
+      <div class="callout callout--info" style="margin-top:22px">
+        <div class="callout__icon" aria-hidden="true">🌍</div>
+        <div>
+          <h3>时区是显式的，不会跟着笔记本漂移</h3>
+          <p>窗口按 <code>timeZone</code> 指定的 IANA 时区解析，默认 <code>Asia/Shanghai</code>。你出差换了系统时区，窗口仍然按你写的墙上时间生效，不会悄悄移位或消失。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 界面 ================= -->
+  <section id="interface">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Interface</p>
+        <h2>界面示意</h2>
+        <p>「任务」是 DSH 内置「对话 / 轨迹」旁边的第三个页面。下面是这个页面的 HTML/CSS 手绘示意（不是截图、不是外部图片）。</p>
+      </div>
+
+      <div class="mock-frame" role="img" aria-label="任务页面示意：顶部分为队列、归档、设置三个面板；下面是一组任务卡片，每张卡片带有执行、上移、下移、编辑、重新排队、取消、删除按钮。">
+        <div class="mock-chrome">
+          <span class="mock-chrome__dot" aria-hidden="true"></span>
+          <span class="mock-chrome__dot" aria-hidden="true"></span>
+          <span class="mock-chrome__dot" aria-hidden="true"></span>
+          <span class="mock-chrome__title">DeepSeek Harness · 工作区：dsh-task-queue</span>
+        </div>
+        <div class="mock-body">
+          <div class="mock-tabs" aria-hidden="true">
+            <span class="mock-tab">对话</span>
+            <span class="mock-tab">轨迹</span>
+            <span class="mock-tab mock-tab--active">任务</span>
+          </div>
+
+          <div class="mock-toolbar">
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <span class="mock-chip mock-chip--open">● 窗口打开 · 剩余 4 小时 12 分</span>
+              <span class="mock-chip">🕗 18:00–07:00 · Asia/Shanghai</span>
+              <span class="mock-chip">⏱️ 间隔 0 分钟</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <span class="mock-chip">归档已完成 (3)</span>
+              <span class="mock-chip mock-chip--open">+ 新建任务</span>
+            </div>
+          </div>
+
+          <div class="mock-list">
+            <div class="mock-task mock-task--running">
+              <span class="mock-task__state" aria-hidden="true">▶</span>
+              <div>
+                <div class="mock-task__title">把 host/state.js 的默认值补上测试</div>
+                <div class="mock-task__meta">执行中 · 会话 a41f · 第 1 次 · 已跑 6 分</div>
+              </div>
+              <div class="mock-task__acts">
+                <span class="mock-act mock-act--run" title="执行">▶</span>
+                <span class="mock-act" title="上移一位">⬆</span>
+                <span class="mock-act" title="下移一位">⬇</span>
+                <span class="mock-act" title="编辑">✎</span>
+                <span class="mock-act" title="取消任务">⊘</span>
+                <span class="mock-act mock-act--del" title="删除">🗑</span>
+              </div>
+            </div>
+
+            <div class="mock-task">
+              <span class="mock-task__state" aria-hidden="true">○</span>
+              <div>
+                <div class="mock-task__title">重写 README 的「已知限制」一节</div>
+                <div class="mock-task__meta">排队中 · 第 2 位</div>
+              </div>
+              <div class="mock-task__acts">
+                <span class="mock-act mock-act--run" title="执行">▶</span>
+                <span class="mock-act" title="上移一位">⬆</span>
+                <span class="mock-act" title="下移一位">⬇</span>
+                <span class="mock-act" title="编辑">✎</span>
+                <span class="mock-act" title="取消任务">⊘</span>
+                <span class="mock-act mock-act--del" title="删除">🗑</span>
+              </div>
+            </div>
+
+            <div class="mock-task mock-task--done">
+              <span class="mock-task__state" aria-hidden="true">✓</span>
+              <div>
+                <div class="mock-task__title">给窗口解析补上跨午夜的边界用例</div>
+                <div class="mock-task__meta">已完成 · 用时 18 分 · 已归档</div>
+              </div>
+              <div class="mock-task__acts">
+                <span class="mock-act" title="重新排队">↻</span>
+                <span class="mock-act mock-act--del" title="删除">🗑</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="mock-legend" aria-hidden="true">
+            <span class="mock-chip">▶ 执行（忽略时间窗与间隔）</span>
+            <span class="mock-chip">⬆⬇ 调序</span>
+            <span class="mock-chip">✎ 编辑</span>
+            <span class="mock-chip">↻ 放回队首</span>
+            <span class="mock-chip">⊘ 取消</span>
+            <span class="mock-chip">🗑 删除</span>
+          </div>
+
+          <p class="mock-note"><span aria-hidden="true">ℹ️</span> 归档面板里每条记录都有「移回队列」，可以把它重新放回任务列表。</p>
+        </div>
+      </div>
+
+      <div class="grid grid--3" style="margin-top:22px">
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">☑️</span> 队列面板</h3>
+          <p>你排的任务卡片。每张卡片可以执行、调序、编辑、取消、删除；左上角能看到窗口状态与下次可运行时间。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🗃️</span> 归档面板</h3>
+          <p>完成或取消的任务留在这里。「归档已完成 (N)」一键把已完成任务归档；「清空归档」需要点两次确认，清空后无法恢复。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">⚙️</span> 设置面板</h3>
+          <p>全局设置（开关、时间窗、时区、autoApprove、目标会话模式、超时、压缩）与当前工作区的执行间隔。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 快速开始 ================= -->
+  <section id="start">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Quick start</p>
+        <h2>快速开始</h2>
+        <p>克隆仓库后在插件目录执行下面两步。需要 Node &gt;= 18。</p>
+      </div>
+
+      <ol class="steps">
+        <li>
+          <h3>构建客户端 bundle</h3>
+          <p>把 <code>src/</code> 下编号的源码拼接成一个浏览器侧单文件 <code>client.js</code>。</p>
+        </li>
+        <li>
+          <h3>安装进 profile</h3>
+          <p>把插件链接进 DSH profile，并写入一行 patch。</p>
+        </li>
+        <li>
+          <h3>打开「任务」页</h3>
+          <p>运行中的 dsh 会监听 <code>cordis.patch.yml</code> 并热加载插件，侧边栏「对话 / 轨迹」旁边就会出现第三个页面「任务」；如果没出现，刷新页面即可。</p>
+        </li>
+      </ol>
+
+      <div class="code" style="margin-top:26px">
+        <div class="code__head">
+          <span class="code__lang">sh</span>
+          <button class="copy-btn" type="button" data-copy="code-install" aria-label="复制安装命令">复制</button>
+        </div>
+        <pre id="code-install"><code><span class="cmt"># 从 src/ 生成 client.js</span>
+node build.mjs
+
+<span class="cmt"># 链接进 profile + 写入一行 patch</span>
+node install.mjs</code></pre>
+      </div>
+
+      <div class="code">
+        <div class="code__head">
+          <span class="code__lang">sh</span>
+          <button class="copy-btn" type="button" data-copy="code-manage" aria-label="复制管理命令">复制</button>
+        </div>
+        <pre id="code-manage"><code><span class="cmt"># 查看当前安装状态</span>
+node install.mjs status
+
+<span class="cmt"># 卸载</span>
+node install.mjs uninstall</code></pre>
+      </div>
+
+      <div class="code">
+        <div class="code__head">
+          <span class="code__lang">sh</span>
+          <button class="copy-btn" type="button" data-copy="code-test" aria-label="复制测试命令">复制</button>
+        </div>
+        <pre id="code-test"><code><span class="cmt"># 构建并跑全部 189 个测试</span>
+node build.mjs &amp;&amp; node --test test/</code></pre>
+      </div>
+
+      <div class="callout callout--info" style="margin-top:24px">
+        <div class="callout__icon" aria-hidden="true">🔁</div>
+        <div>
+          <h3>改动生效规则</h3>
+          <ul>
+            <li>改了 <code>host/</code>：<strong>重启 DSH</strong> 才生效。</li>
+            <li>改了 <code>src/</code>：先 <code>node build.mjs</code> 重新生成 <code>client.js</code>，然后<strong>刷新页面</strong>。</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 配置 ================= -->
+  <section id="config">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Configuration</p>
+        <h2>配置项与默认值</h2>
+        <p>下表是开箱即用的默认值。大多数配置是全局的，只有一个字段按工作区保存。</p>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <caption>dsh-plugin-task-queue 配置默认值</caption>
+          <thead>
+            <tr>
+              <th scope="col">配置项</th>
+              <th scope="col">默认值</th>
+              <th scope="col">作用域</th>
+              <th scope="col">说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row"><code>enabled</code></th>
+              <td class="def">true</td>
+              <td>全局</td>
+              <td>总开关。关掉后任何时间都不会领取任务。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>windows</code></th>
+              <td class="def">[{ start: '18:00', end: '07:00' }]</td>
+              <td>全局</td>
+              <td>允许执行的时间窗列表，任一打开即可运行。空列表 = 不排期。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>timeZone</code></th>
+              <td class="def">'Asia/Shanghai'</td>
+              <td>全局</td>
+              <td>解析窗口所用的显式 IANA 时区。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>autoApprove</code></th>
+              <td class="def">true</td>
+              <td>全局</td>
+              <td>跳过队列驱动会话的授权确认。见下方<a href="#safety">安全提示</a>。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>targetMode</code></th>
+              <td class="def">'shared'</td>
+              <td>全局</td>
+              <td>任务会话的选择方式：<code>shared</code>（复用一个 runner 会话）或 <code>fresh</code>（每个任务新会话）。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>taskTimeoutMinutes</code></th>
+              <td class="def">360</td>
+              <td>全局</td>
+              <td>单个任务最长运行分钟数，超时标记为失败。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>compactBeforeTask</code></th>
+              <td class="def">false</td>
+              <td>全局</td>
+              <td>共用会话时，在每个任务前先压缩上下文，代价是一次模型调用并丢失细节，因此默认关闭。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>file</code></th>
+              <td class="def">''</td>
+              <td>全局</td>
+              <td>队列文件路径。空 = <code>&lt;DSH_HOME&gt;/task-queue/queue.json</code>。</td>
+            </tr>
+            <tr>
+              <th scope="row"><code>cooldownMinutes</code></th>
+              <td class="def">0</td>
+              <td><strong>按工作区</strong></td>
+              <td>上一个任务结束后等待多久再开始下一个。<code>0</code> = 立即开始；批次里第一个任务永不等待。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 安全 ================= -->
+  <section id="safety">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Unattended access</p>
+        <h2>无人值守权限与它的风险</h2>
+        <p>夜里的任务没有人在旁边点「允许」。插件的做法是主动把队列驱动的会话变成不需要授权的会话。</p>
+      </div>
+
+      <div class="callout">
+        <div class="callout__icon" aria-hidden="true">⚠️</div>
+        <div>
+          <h3>安全风险：被队列驱动的会话拥有完全文件系统与命令执行权限</h3>
+          <p><strong><code>autoApprove</code> 默认是打开的。</strong>打开时，经队列驱动的会话可以在不向你确认的情况下读写文件、执行命令。请只把任务排给你信任的内容，并在不需要无人值守时把它关掉。</p>
+        </div>
+      </div>
+
+      <h3 style="margin-top:30px">三层绕过是怎么实现的</h3>
+      <p style="color:var(--text-dim);max-width:70ch">这三层都只对<strong>插件驱动的会话</strong>生效。你正在打字的会话（包括跑着这段对话的那个）不受影响。</p>
+      <ol class="layers">
+        <li>
+          <p><strong>设置会话的 <code>sandbox/mode</code> 为 <code>danger-full-access</code></strong>——让文件系统与 shell 工具一开始就不需要提权。这一层决定活到底能不能干成。</p>
+        </li>
+        <li>
+          <p><strong>在 <code>tools/pre-execute</code> 上注册监听器</strong>，对被托管的会话直接回答 <code>allow</code>。这是真正的绕过：它在 <code>ask</code> 变成审批请求<em>之前</em>就短路了工具流水线，且与会话携带的审批策略无关。</p>
+        </li>
+        <li>
+          <p><strong>在 <code>approval/request</code> 上注册监听器</strong>，对被托管的会话回答 <code>allowed-once</code>，用来兜住那些直接向审批服务提问、而不是走 pre-execute 决策的工具。</p>
+        </li>
+      </ol>
+
+      <div class="grid grid--2" style="margin-top:26px">
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🔒</span> 作用域被限制住了</h3>
+          <p>每一层都会先检查会话是否被本插件托管。没有排任何排队或运行中任务的会话、以及你手动开的会话，都不会获得这些授权。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🧯</span> 想更保守？</h3>
+          <p>把 <code>autoApprove</code> 关掉即可。代价是深夜的任务可能因为无人回答授权提示而失败——这正是默认打开它的原因。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 已知限制 ================= -->
+  <section id="limits">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Limitations</p>
+        <h2>已知限制</h2>
+        <p>这些是当前版本真实存在的边界，排任务前请先看一眼。</p>
+      </div>
+
+      <div class="grid grid--2">
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🔌</span> 需要 DSH Host 在运行</h3>
+          <p>队列由 Host 侧的插件驱动。Host 没起来，队列就不会动。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🔍</span> 完成状态由 agent 状态推断</h3>
+          <p>插件不是通过任务的「业务结果」判断成败，而是根据 agent 的状态推断，所以极少数情况下判定可能与你的直觉不同。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">⏲️</span> 窗口精确到分钟</h3>
+          <p>时间窗的最小粒度是分钟（<code>HH:mm</code>），没有秒级排期。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">💥</span> 崩溃可能让任务重跑一次</h3>
+          <p>如果进程在任务执行中崩溃，重启后该任务可能被再跑一遍。因此任务指令建议写成<strong>幂等</strong>的——重复执行一次不会造成破坏。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🚧</span> 任务不能跨工作区移动</h3>
+          <p>任务属于创建它的工作区，不支持把它挪到另一个工作区去执行。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">1️⃣</span> 每个工作区只跑一个</h3>
+          <p>同一时刻一个工作区最多一个任务在跑。想并行就拆成多个工作区，而不是调大这个数——它不可配置。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 技术栈 ================= -->
+  <section id="stack">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">Stack</p>
+        <h2>技术栈</h2>
+        <p>有意做得小：纯 JavaScript，没有构建依赖。</p>
+      </div>
+
+      <div class="grid grid--3">
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🖥️</span> Host 侧</h3>
+          <p>Cordis 插件，位于 <code>host/*.js</code>。负责调度、时间窗、状态存储与权限管理。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🌐</span> 浏览器侧</h3>
+          <p>单文件 bundle <code>client.js</code>，由 <code>build.mjs</code> 拼接 <code>src/</code> 下编号源码生成。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🧪</span> 测试</h3>
+          <p>189 个测试用 <code>node --test</code> 运行，零第三方依赖。命令：<code>node build.mjs &amp;&amp; node --test test/</code></p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">📦</span> 无构建依赖</h3>
+          <p>纯 JavaScript，不引打包器、不引转译器。仓库里能跑的就是最终产物。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">🟢</span> Node &gt;= 18</h3>
+          <p>使用 Node 内置的测试运行器与标准库能力，没有运行时 npm 依赖。</p>
+        </article>
+        <article class="card">
+          <h3><span class="card__icon" aria-hidden="true">📄</span> MIT 许可</h3>
+          <p>随意使用、修改、分发。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= FAQ ================= -->
+  <section id="faq">
+    <div class="wrap">
+      <div class="section__head">
+        <p class="section__kicker">FAQ</p>
+        <h2>常见问题</h2>
+        <p>关于时间窗、隔离、授权的几个高频疑问。</p>
+      </div>
+
+      <div class="faq">
+        <details open>
+          <summary>任务会在白天跑吗？</summary>
+          <div class="faq__body">
+            <p>默认不会。默认窗口是 <code>18:00–07:00</code>，窗口之外队列不领取任务，卡片只是安静地排队。</p>
+            <p>如果你确实想立刻开工，卡片上的 <strong>▶ 执行</strong> 会立即执行该任务，<strong>忽略时间窗与执行间隔</strong>。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>我在 A 工作区建的任务，会在 B 工作区跑吗？</summary>
+          <div class="faq__body">
+            <p>不会。任务按工作区隔离：在工作区里建的任务属于该工作区、只在该工作区执行，别的工区看不到。</p>
+            <p>而且任务不能跨工作区移动——想换地方执行，就在那个工作区里新建一条。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>为什么每个工作区同时只跑一个任务？这是设置项吗？</summary>
+          <div class="faq__body">
+            <p>是设计如此，<strong>不是设置项</strong>，也不能调。同一个工作区里并发改动代码，很容易让两个会话互相踩到对方的改动，所以串行是刻意的选择。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>执行间隔（<code>cooldownMinutes</code>）在哪里设？</summary>
+          <div class="faq__body">
+            <p>按工作区设置，不是全局的。它的含义是「上一个任务结束后等待多久再开始下一个」：</p>
+            <ul>
+              <li><code>0</code>（默认）＝ 上一个结束就立刻开始下一个。</li>
+              <li>批次里的<strong>第一个任务永不等待</strong>——间隔只发生在任务之间。</li>
+            </ul>
+          </div>
+        </details>
+
+        <details>
+          <summary><code>18:00 → 07:00</code> 会被当成空窗口吗？</summary>
+          <div class="faq__body">
+            <p>不会。起点大于终点表示<strong>跨午夜</strong>：从傍晚开始，到次日早上结束。这正是「晚上挂机干活」要的语义。</p>
+            <p>而 <code>18:00 → 18:00</code>（起点等于终点）表示<strong>全天</strong>。窗口列表为空才表示不排期。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>我把笔记本带到别的时区，窗口会跟着变吗？</summary>
+          <div class="faq__body">
+            <p>不会。窗口按 <code>timeZone</code> 里显式写明的 IANA 时区解析（默认 <code>Asia/Shanghai</code>），不依赖机器当前的系统时区。换时区不会悄悄改变窗口。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary><code>autoApprove</code> 会不会影响我正在打字的会话？</summary>
+          <div class="faq__body">
+            <p>不会。三层绕过都对<strong>插件驱动的会话</strong>生效，并且每一层都会先检查该会话是否被队列托管。你手动开的会话、以及你正在打字的会话都不会获得额外授权。</p>
+            <p>但它确实会作用于被队列驱动的会话——那些会话拥有完全文件系统与命令执行权限，请见页面上的<a href="#safety">安全提示</a>。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>改了代码要怎样让它生效？</summary>
+          <div class="faq__body">
+            <ul>
+              <li>改了 <code>host/</code>：需要<strong>重启 DSH</strong>。</li>
+              <li>改了 <code>src/</code>：先 <code>node build.mjs</code>，再<strong>刷新页面</strong>。</li>
+            </ul>
+          </div>
+        </details>
+
+        <details>
+          <summary>任务卡住了会怎样？</summary>
+          <div class="faq__body">
+            <p>单个任务受 <code>taskTimeoutMinutes</code> 限制（默认 360 分钟 = 6 小时），超时会被标记为失败，队列可以继续往下走。</p>
+            <p>如果进程在任务执行中崩溃，重启后该任务<strong>可能被重跑一次</strong>，所以任务指令建议写成幂等的。</p>
+          </div>
+        </details>
+
+        <details>
+          <summary>怎么卸载？</summary>
+          <div class="faq__body">
+            <p>在插件目录执行 <code>node install.mjs uninstall</code>。想先确认当前状态用 <code>node install.mjs status</code>。</p>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div class="footer__grid">
+      <div>
+        <h4>dsh-plugin-task-queue</h4>
+        <p style="margin-top:.4em">DeepSeek Harness 的时间窗限定任务队列：白天攒卡片，夜里无人值守地跑。MIT 许可。</p>
+      </div>
+      <div>
+        <h4>链接</h4>
+        <ul>
+          <li><a href="https://github.com/krisir/dsh-task-queue" rel="noopener">GitHub 仓库</a></li>
+          <li><a href="https://github.com/krisir/dsh-task-queue#readme" rel="noopener">中文文档（README）</a></li>
+          <li><a href="https://github.com/krisir/dsh-task-queue/issues" rel="noopener">问题反馈</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>本页导航</h4>
+        <ul>
+          <li><a href="#features">特性</a></li>
+          <li><a href="#start">快速开始</a></li>
+          <li><a href="#config">配置</a></li>
+          <li><a href="#safety">安全</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer__bottom">
+      <span>MIT License · 纯 JavaScript · Node &gt;= 18 · 189 个测试</span>
+      <span>本页为静态介绍页，零外部资源，可离线打开。</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  function fallbackCopy(text) {
+    var area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    document.body.appendChild(area);
+    area.select();
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (err) { ok = false; }
+    document.body.removeChild(area);
+    return ok;
+  }
+
+  function label(btn, text) {
+    if (!btn.dataset.original) btn.dataset.original = btn.textContent;
+    btn.textContent = text;
+    btn.dataset.copied = "true";
+    window.setTimeout(function () {
+      btn.textContent = btn.dataset.original;
+      btn.dataset.copied = "false";
+    }, 1600);
+  }
+
+  var buttons = document.querySelectorAll(".copy-btn");
+  Array.prototype.forEach.call(buttons, function (btn) {
+    btn.addEventListener("click", function () {
+      var target = document.getElementById(btn.dataset.copy);
+      if (!target) return;
+      var text = target.innerText;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(function () {
+          label(btn, "已复制 ✓");
+        }, function () {
+          label(btn, fallbackCopy(text) ? "已复制 ✓" : "复制失败");
+        });
+      } else {
+        label(btn, fallbackCopy(text) ? "已复制 ✓" : "复制失败");
+      }
+    });
+  });
+})();
+</script>
+</body>
+</html>

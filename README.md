@@ -1,18 +1,13 @@
 # dsh-plugin-task-queue
 
-A DeepSeek Harness plugin that adds a **time-gated task queue**. Stack up task
-cards during the day; when the window opens — say `18:00` to `07:00` — the queue
-claims them one by one, hands each to a session, and lets the agent work
-unattended.
+DeepSeek Harness（DSH）的任务队列插件：白天把任务写好排进队列，到了你设定的时段（例如 `18:00`–`07:00`），队列会按顺序把它们交给 AI 会话自动执行、无人值守。
 
-The queue is a full page that sits beside the built-in **对话** and **轨迹** views,
-and it is **a workspace's page**: a task created while you are in a workspace
-belongs to that workspace, runs there, and is invisible from every other one.
+队列是 DSH 里"对话 / 轨迹"旁边的第三个页面，叫 **任务**。它是**某个工作区（workspace）的页面**：你在哪个工作区里新建任务，任务就属于那个工作区、在那里执行，其他工作区看不到它。
 
 ```
    对话   轨迹   任务
    ───────────────────
-   任务队列  我的项目   时段外            队列 │ 归档 ① │ 设置
+   任务队列  我的项目   时段外            队列 ① │ 归档 │ 设置
    当前时段外，2 个任务在排队 · 将于 18:00 开始（3 小时后）
 
    新建任务
@@ -29,268 +24,92 @@ belongs to that workspace, runs there, and is invisible from every other one.
        10/8 15:02 · 第 1 次 · 会话 3f9a1c2b  [▶ 执行] ↻ 🗑
 ```
 
-## Install
+## 特性亮点
+
+- **时间窗自动执行**：可以设多个时段，任意一个到点就开始跑；`18:00`–`07:00` 表示跨午夜，`18:00`–`18:00` 表示全天。
+- **按工作区隔离**：每个工作区有自己独立的队列和任务列表，跨工作区互不可见、互不干扰。
+- **同一时刻只跑一个任务**：每个工作区一次只执行一个任务，避免多个任务共用一个会话时互相打架。
+- **共享会话 + 自动压缩**：默认所有任务共用一个会话，结果集中在一处；可选在每个任务开始前先压缩会话，避免上下文越滚越大。
+- **无人值守**：任务会话切到完全访问权限，队列自动放行所有授权请求，AI 不会停在提问上等待。
+- **结果留档**：任务完成后会记录最后一条 AI 回复；已完成的任务可一键归档，归档可逆。
+
+## 安装
+
+插件分为 host 半边（`index.js`、`host/`）和浏览器半边（`client.js`），浏览器半边由 `src/` 构建生成。
 
 ```sh
-node build.mjs      # regenerate client.js from src/
-node install.mjs    # symlink into the profile + one patch row
+node build.mjs      # 由 src/ 生成 client.js
+node install.mjs    # 建符号链接，并向 cordis.patch.yml 追加一行配置
 ```
 
-`install.mjs` does exactly two reversible things: it symlinks this directory to
-`<profile>/node_modules/dsh-plugin-task-queue` (what DSH's package resolution
-looks for), and appends one `insert` row to `<profile>/cordis.patch.yml` between
-markers it owns. It defaults to `$DSH_PROFILE` (here, `desktop`).
+`install.mjs` 只做两件可逆的事：
+
+1. 把本目录软链到 `<profile>/node_modules/dsh-plugin-task-queue`（DSH 解析包名时找的就是它）；
+2. 向 `<profile>/cordis.patch.yml` 追加一段 `insert` 配置行，前后带有本脚本自己的 marker。
+
+profile 名默认取环境变量 `$DSH_PROFILE`，否则为 `web`；DSH_HOME 默认 `~/.dsh`。它不会改动 profile 自己的 `package.json`。
 
 ```sh
-node install.mjs status             # what is installed where
-node install.mjs uninstall          # unlink + remove the row
+node install.mjs status        # 查看当前安装状态
+node install.mjs uninstall     # 移除软链和配置行
 ```
 
-> ### What needs a restart, and what does not
->
-> This profile's HMR is configured with `root: []`, so **nothing watches this
-> package** by default. That leaves two caches with two different behaviours:
->
-> - The **host half** (`index.js`, `host/*.js`) is a Node ES module cached by URL:
->   re-importing it returns the old code, so a host change needs a **DSH restart**.
-> - The **browser bundle** (`client.js`) is re-read from disk by the client module
->   system, which tracks the artifact by its file metadata (mtime, ctime, size).
->   A rebuild is picked up without a restart — but the **browser** only fetches the
->   new bytes on the next page load, so **reload the page**.
->
-> Short version: `host/` change → restart DSH. `src/` change → `node build.mjs` +
-> reload the page. If a reload ever shows stale UI, restarting DSH is the
-> reliable fallback.
+安装完成后，正在运行的 dsh 会监听 `cordis.patch.yml` 并热加载插件；如果没有出现，刷新页面即可。
 
-## Use
+> **改完代码什么时候生效**
+>
+> - 改了 **host 半边**（`index.js`、`host/*.js`）→ 需要**重启 DSH**。它是 Node ES 模块，按 URL 缓存，重新 import 拿到的还是旧代码。
+> - 改了 **浏览器半边**（`src/`）→ 需要 `node build.mjs` 重新构建，**再刷新页面**。构建产物会被自动重新读取，不需要重启，但浏览器要下一次加载页面才会拿到新内容。
+>
+> 如果刷新后界面还是旧的，重启 DSH 是可靠的兜底办法。
 
-| Where | What |
+## 快速开始（5 分钟）
+
+1. **安装**：`node build.mjs && node install.mjs`，然后刷新页面。
+2. **进入工作区**：在 DSH 中打开一个属于某个工作区的会话——队列是工作区的页面，没有工作区的会话没有队列。
+3. **打开「任务」标签页**：在「对话 / 轨迹」旁边找到「任务」，即队列页面。
+4. **设置时段**：切到「设置」面板，添加一个时段（例如 `18:00` – `07:00`），确认时区是你想要的（默认 `Asia/Shanghai`）。
+5. **写任务**：在「队列」面板的输入框里写标题和内容，点「加入队列」（或按 `Ctrl`/`⌘ + Enter`）。
+6. **等待执行**：时段一到，队列就会自动开始执行；想立刻跑，点卡片上的「▶ 执行」。
+
+## 界面与操作说明
+
+| 位置 / 按钮 | 作用 |
 |---|---|
-| The **任务** tab, beside 对话 and 轨迹 | Opens the queue for the workspace you are in |
-| **队列** / **归档** / **设置** | The task list, what you filed away, and the queue settings |
-| **`归档已完成 (N)`** | Files every finished task away in one click |
-| **`清空归档`** | Empties the archive — arms first, then deletes |
-| `#1` `#2` … | The task's place in the execution order |
-| The instruction box + `加入队列` | Adds a task to the back of this workspace's queue |
-| `Ctrl`/`⌘` + `Enter` | Adds without reaching for the button |
-| **`▶ 执行`** on a card | Runs that task **now**, ignoring the window |
-| `⬆` `⬇` | Moves a waiting task one place in the line |
-| `✎` | Edits the title and the instruction in place |
-| `↻` | Puts a finished, failed, or cancelled task back at the front — without running it |
-| `⊘` | Cancels a waiting task without deleting it |
-| `🗑` | Deletes it |
+| **任务** 标签页（在 对话、轨迹 旁边） | 打开当前工作区的队列 |
+| **队列 / 归档 / 设置** 三个面板 | 任务列表、已归档的任务、队列设置 |
+| **`归档已完成 (N)`** | 一键把所有已完成的任务归档，`N` 是数量 |
+| **`清空归档`** | 清空归档。需点两次：第一次进入确认态，第二次才真正删除 |
+| `#1` `#2` … | 任务在队列中的执行顺序 |
+| 输入框 + `加入队列` | 把一个任务加到当前工作区队列的末尾 |
+| `Ctrl`/`⌘ + Enter` | 与「加入队列」等价，不用去点按钮 |
+| 卡片上的 **`▶ 执行`** | **立即执行**这个任务，忽略时间窗和执行间隔 |
+| `⬆` `⬇` | 把等待中的任务上移/下移一位 |
+| `✎` | 就地编辑标题和内容 |
+| `↻` | 把已完成/失败/已取消的任务放回**队首**（只是重新排队，不会立即执行） |
+| `⊘` | 取消一个等待中的任务，但不删除它 |
+| `🗑` | 删除任务 |
+| 归档卡片上的 `移回队列` | 把归档的任务放回队列列表 |
 
-**执行** is deliberately the only labelled action on a card. Running a task by
-hand is what you reach for when something is sitting there and you want it now,
-and an icon in a row of five other icons is a thing you have to learn.
+**执行** 是卡片上唯一带文字的按钮，其余都是图标；图标按钮都带无障碍名称（悬停可见说明）。
 
-### Archiving
+### 归档 vs 删除
 
-The archive is a **filing** decision, not a lifecycle one, which is why it is a
-separate tab rather than another status. `归档已完成` files away every `done` task
-at once; a failure or a cancellation stays in the queue list, because those are
-still decisions you have to make — retry or delete — and hiding them would take
-that decision away without asking. An archived task holds no place in the line and
-is never claimed.
+归档是"收起来"，不是任务状态的改变：`归档已完成` 一次性把所有 `done` 的任务归档；失败或已取消的任务会留在队列列表里，因为你需要决定是重试还是删除。
 
-It is reversible: each archived card has **移回队列**. The one irreversible action
-is `清空归档`, so it arms on the first click and deletes on the second, and says
-what it is about to do in between. "One click" a few pixels from the search field
-is not a good enough reason to lose the history.
+归档是可逆的，每张归档卡片上都有 `移回队列`。唯一不可逆的操作是 `清空归档`，所以它需要两次点击确认，并在中间提示"清空后无法恢复"。
 
-Both faces put their one bulk control **above** their list — `归档已完成` over the
-queue, `清空归档` over the archive. Each acts on everything below it, and a control
-that moves between two faces is a control you have to re-find; below the last card
-either one would be something you scroll past every task to reach, which is
-backwards on a page read top-down. An empty list shows no bulk control at all:
-there is nothing to act on, and the face already says it is empty.
+已归档的任务不占队列位置，也不会被执行。
 
-### Why the page reads the host every five seconds
+### 页面为什么每 5 秒读取一次宿主
 
-The queue runs on the Host, in another process. The page is a mirror of it, so it
-re-reads the snapshot on a slow poll — that is what makes a task claimed at 18:00
-appear without anyone reloading. While a task is running the snapshot keeps
-changing, and the poll keeps picking those changes up; that is the page working,
-not the page resetting.
+队列实际运行在宿主（Host）进程里，页面只是它的镜像，因此页面每 5 秒轮询一次宿主快照——这就是 18:00 被认领的任务不需要刷新就能出现在页面上的原因。任务执行期间快照一直在变，轮询会持续捕捉这些变化，这是页面在正常工作，不是页面在重置。
 
-Nothing you are typing is allowed to be a casualty of that read. No editable
-value lives in component state: the composer's text, the settings form's
-uncommitted values, and the inline task edit are all kept in the plugin's own
-store, which the poll does not touch and a remount cannot discard. The settings
-form is seeded from the host on the first edit and owns the form from then on, so
-a poll landing mid-edit cannot pull a field back to the value the Host still has.
-The inline edit is deliberately *not* re-seeded while it is open, for the same
-reason — re-seeding on a changed snapshot is exactly how a half-typed edit gets
-overwritten.
+你正在输入的内容不会被轮询打断：输入框的文本、设置表单里还没保存的修改、卡片上的行内编辑都存在插件自己的 store 里，轮询不会碰它们，组件重新挂载也不会丢弃。设置表单在你第一次编辑时从宿主取值，之后由表单自己掌握，所以轮询不会把字段拉回宿主那边的旧值。
 
-### The interval between tasks
+## 配置项
 
-`执行间隔` paces a batch: after one task finishes, the next one waits that many
-minutes. `0` means "start the next one as soon as a slot is free". The wait is
-measured from a per-workspace anchor written in the same commit as the finish, so
-deleting a finished task cannot silently cut a pause short, and the status line
-counts the wait down — a queue that has gone quiet should say why.
-
-The interval is **per workspace**: the value lives in the workspace's own
-settings, so one workspace can pace a batch out while another runs straight
-through, and setting it in one page leaves every other queue alone. It is the
-setting most likely to differ between two projects — one repo may be
-rate-limited, another may be a scratch space you want worked through quickly —
-which is why it is the one worth setting by hand per workspace.
-
-It is a gap **between two tasks**, not a delay before the queue may act. A task
-with nothing finished ahead of it in the list opens the run and starts at once,
-even when the anchor is still inside the interval — which is the normal case when
-one batch has just been archived and the next task arrives. Plainly: the first
-task of a batch never waits.
-
-The interval never applies to a task already running. The **执行** button ignores
-it, exactly as it ignores the window.
-
-### One task at a time
-
-`同时执行数` is not a setting: a workspace runs **one task at a time**, always.
-Tasks in a workspace share a session by default, so two at once is not
-parallelism — it is the second task queueing behind the first while both count as
-running, which makes the panel lie about what is happening.
-
-### What is per workspace
-
-**The execution interval is the per-workspace setting.** It is the one that
-legitimately differs between two projects, so it is the one you set on the page
-for the workspace you are looking at — one repo may be rate-limited, another may
-be a scratch space you want worked through quickly.
-
-The other settings — the hours, the zone, the approval bypass, the target mode,
-the timeout, the compaction switch — are the **plugin's**. They are stored once,
-they apply to every workspace, and changing them from any workspace's page changes
-the queue as a whole. They are set in the `config:` block, or on the page, and
-either way there is one answer rather than one per repository to keep in sync.
-
-This is enforced by where the values live, not by convention. The document has a
-single `settings` object for the shared half and a small entry per workspace
-holding only its interval:
-
-```jsonc
-{
-  "version": 3,
-  "settings": { "windows": [ … ], "timeZone": "Asia/Shanghai", … },
-  "workspaces": { "<workspaceId>": { "settings": { "cooldownMinutes": 30 } } },
-  "tasks": [ … ]
-}
-```
-
-So a workspace has nowhere to put its own hours, and two queues cannot drift
-apart on when they run. `settingsFor(workspaceId)` joins the two halves into the
-one flat object every caller reads, which is why the rest of the code never has
-to know which half a field came from.
-
-### Compacting a shared session
-
-`任务执行前压缩会话` is for the single-session modes. A batch of tasks sharing one
-conversation accumulates every earlier task's turns, tool output included, and the
-context grows until the model is working against a history it mostly does not
-need. With the switch on, the session is compacted **before** each task, so every
-task starts from a summary.
-
-It is deliberately `compactNow` rather than `compactIfNeeded`: the point is to
-keep each task starting clean, not to wait until the context is already the
-problem. It costs a model call and discards detail, so it is off by default, it
-never applies to a fresh session per task (there is nothing behind it), and it is
-best-effort — if no compaction service is mounted or the model call fails, the
-task still runs. Losing the optimization is not a reason to lose the night's work.
-
-### Workspaces own their queues
-
-The page is mounted for a session, the Host resolves that session to a workspace,
-and everything on screen belongs to that workspace: its tasks, its hours, its
-concurrency limit. Nothing asks you which workspace you meant, because the answer
-is wherever you opened it.
-
-That is enforced on the Host, not just in the UI. Every request names the
-**session** it came from — never a workspace id, which a client could get wrong —
-and a task mutation whose id belongs to a different workspace answers `404`, so a
-stale page can never edit another queue. A session attached to no workspace has
-no queue, and the page says so rather than filing tasks somewhere invisible.
-
-### There is no task title
-
-A task is its instruction and nothing else. The card headings itself from the
-instruction's first line — which is what a title field would have held anyway —
-so nothing asks you to name what you have already written, and there is no second
-field to keep in step.
-
-### Execution windows
-
-A workspace can have **as many windows as you like**, and the queue runs whenever
-any one of them is open — an overnight block plus a lunchtime slot, say.
-`18:00 → 07:00` means "from six in the evening until seven the next morning": a
-start later than the end is understood as wrapping midnight, not as an empty
-interval. `18:00 → 18:00` reads as all day, and **no windows at all** means
-nothing is scheduled.
-
-Times are read in an **explicit IANA zone** rather than the machine's, so a laptop
-that travels does not silently move the window: the user set a wall clock on
-purpose.
-
-Outside every window the queue does nothing at all. Tasks can be created, edited,
-reordered, and deleted, and none of it runs.
-
-## How a task runs
-
-1. **Claim.** The task is marked `running` and written to disk *before* the
-   prompt is admitted, so a crash in between re-queues the task rather than
-   losing it.
-2. **Session.** Per the `任务执行位置` setting: a fresh session per task (the
-   default), one shared runner, or one pinned session — the runner is per
-   workspace, so two workspaces never share a conversation. New sessions are
-   attached to the task's workspace, which is what puts them in the sidebar where
-   you can read the results in the morning.
-3. **Relaxed permissions.** See below.
-4. **Prompt.** The task text is framed with a note that nobody is present and the
-   agent should not stop to ask.
-5. **Completion.** The queue watches `agent/status` for the transition
-   `running → idle` and records the last assistant message as the result. A task
-   that never settles is cancelled and failed after `单任务超时`.
-
-## Skipping every authorization
-
-This is worth being precise about, because the obvious setting does the opposite
-of what it looks like. The Host has exactly two approval policies: `ask` and
-`never`. **`never` does not mean "allow everything" — it means "reject everything
-that needs approval"**, and it returns that verdict before any answerer runs, so
-nothing can override it. A task left under `never` would fail at the exact moment
-it needed to act.
-
-So `自动跳过所有授权` is three deliberate layers, all scoped to sessions **this
-plugin drives**:
-
-| Layer | What it does |
-|---|---|
-| `sandbox/mode = danger-full-access` on the task's session | The filesystem and shell tools never need an escalation, so nothing asks in the first place. This is the layer that decides whether the work can happen. |
-| A `tools/pre-execute` listener returning `{ kind: 'allow' }` | The real bypass: it short-circuits the tool pipeline before an `ask` can become an approval request, regardless of the session's policy. |
-| An `approval/request` listener returning `'allowed-once'` | Covers a tool that asks the approval service directly instead of expressing its need as a pre-execute decision. |
-
-Both listeners are registered **first** (`prepend: true`), ahead of the Web GUI's
-own answerer, so a managed session can never end up waiting on a prompt nobody is
-awake to answer. Both check the managed-session set first, so a session you are
-typing into — including the one running this conversation — keeps its normal
-permissions.
-
-The switch is per workspace, so it is tracked per session: a workspace with the
-switch off never has its sessions managed at all. Turning it off stops the grants
-immediately; the `sandbox/mode` event already written to a task session's log is
-durable, so a session that ran unattended stays unconfined. That is intentional —
-it is a record of how the session actually ran — but it is the reason the switch
-is worth leaving on only when you mean it.
-
-## Configuration
-
-The `config:` block in the inserted row is the **plugin's settings** — the shared
-half. It seeds a document that does not exist yet; once the document holds its own
-settings, those are the truth, so a composition config cannot undo an edit the
-user made in the page. The interval is not in this block: it is the per-workspace
-setting and is set on the page.
+配置块（`cordis.patch.yml` 中插入行的 `config:`）是**整套队列共用的设置**，对所有工作区生效：
 
 ```yaml
 - insert:
@@ -303,48 +122,167 @@ setting and is set on the page.
           - { start: '12:00', end: '13:00' }
         timeZone: 'Asia/Shanghai'
         autoApprove: true
-        targetMode: shared       # shared (recommended) | fresh
+        targetMode: shared       # shared（推荐） | fresh
         taskTimeoutMinutes: 360  # 1..1440
-        compactBeforeTask: false # compact a shared session before each task
-        file: ''                 # empty = <DSH_HOME>/task-queue/queue.json
+        compactBeforeTask: false # 每个任务开始前压缩共用会话
+        file: ''                 # 留空 = <DSH_HOME>/task-queue/queue.json
 ```
 
-`cooldownMinutes` is deliberately absent: it is the one setting a workspace owns,
-so it is set on the page for the workspace it applies to rather than once for the
-whole queue.
+| 字段 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `enabled` | 布尔 | `true` | 总开关。为 `false` 时任何时段都不会认领任务，任务只排队 |
+| `windows` | 数组 | `[{ start: '18:00', end: '07:00' }]` | 允许执行的时段列表，每项是 `HH:mm` 的开始/结束时间。**空数组 = 不排期**，任务不会自动执行 |
+| `timeZone` | 字符串 | `'Asia/Shanghai'` | 解析时段所用的 IANA 时区名，例如 `Asia/Shanghai`、`America/New_York` |
+| `autoApprove` | 布尔 | `true` | 自动跳过所有授权请求，只对队列自己驱动的会话生效。详见下文"无人值守与权限" |
+| `targetMode` | 字符串 | `'shared'` | 任务执行位置。`shared` = 每个工作区共用一个会话（推荐）；`fresh` = 每个任务新建一个会话 |
+| `taskTimeoutMinutes` | 数字 | `360` | 单任务超时（分钟），取值 1–1440。超时后任务被记为失败 |
+| `compactBeforeTask` | 布尔 | `false` | 每个任务开始前先压缩共用会话。只在 `shared` 模式下有意义 |
+| `file` | 字符串 | `''` | 队列数据文件路径。留空表示 `<DSH_HOME>/task-queue/queue.json` |
 
-An invalid value in the *page* is dropped rather than repaired against the
-defaults, so one mistyped field never resets the fields around it. A window
-*list* is the one place where partial application is right: an entry that cannot
-be parsed is dropped and the rest are kept, because a list is a set of
-independent intervals. Sending an empty list is therefore a real instruction.
+**`cooldownMinutes`（执行间隔）故意不在这个配置块里**：它是唯一一个"按工作区"的设置，在页面的「设置」面板里为当前工作区单独设置。
 
-## Architecture
+配置块只是**初始种子**：某个工作区第一次被看到时把配置写进去，之后以页面编辑的持久化文档为准。所以在配置块里改值不会覆盖你已经在页面上改过的设置。
+
+页面上的设置面板分两段，写得很直白：上半段（时段、时区、启用、自动授权、执行位置、会话压缩、超时）标注"对所有工作区生效"；下半段（执行间隔）标注"按工作区分别设置，只影响当前工作区"。
+
+### 参数校验行为
+
+页面上填了无效值时，该字段会被**丢弃**而不是按默认值重置——这样一个字段写错不会把旁边的字段一起恢复成出厂值。`windows` 列表是唯一的例外：无法解析的条目会被丢掉、其余保留，因为一个列表是若干互相独立的区间。因此提交一个空列表是一个真实的指令（"不排期"）。
+
+## 时间窗与执行间隔
+
+### 时间窗
+
+- **可以有多个时段**，任意一个处于打开状态队列就会运行。
+- `18:00 → 07:00` 表示"晚上六点到次日早上七点"：开始时间晚于结束时间表示**跨午夜**，而不是一个空区间。
+- `18:00 → 18:00` 表示**全天**。
+- **时段列表为空**表示不排期，任务只会排队。
+- 时间按**显式指定的 IANA 时区**解析，不跟随机器本地时区——这样换台电脑或出差也不会让时段含义悄悄改变。
+- 时段精确到分钟。所有时段之外，队列什么都不做：任务可以创建、编辑、排序、删除，但不会被执行。
+
+### 执行间隔（`cooldownMinutes`）
+
+- 上一个任务结束后，等这么多分钟再开始下一个。`0` 表示"一有空位就接着执行"。
+- 它是**按工作区**生效的：值存在工作区自己的记录里，一个工作区可以慢慢跑，另一个可以连续跑完。
+- 它作用于**批次中两个任务之间**，不是"队列可以行动之前的延迟"。因此**批次里的第一个任务永远不会等待**——即使计时锚点还落在间隔之内，它也会立即开始。已归档一个批次、下一批任务到来时，这是最常见的情况。
+- 它不会作用于正在执行的任务；点「▶ 执行」手动执行时也会忽略它，就像忽略时间窗一样。
+
+### 为什么同一时刻只有一个任务
+
+**每个工作区同时只执行一个任务，这不是设置项，而是设计如此。** 同一工作区的任务默认共用一个会话，同时跑两个不是并行，而是第二个排在第一个后面、却两个都显示为执行中——那样只会让页面显示与实际不符。
+
+## 无人值守与权限
+
+这一节值得说清楚，因为直觉上的理解正好是反的。
+
+宿主只有两种授权策略：`ask` 和 `never`。**`never` 不是"允许一切"，而是"拒绝一切需要授权的请求"**，而且它在任何应答者之前就返回结论，无法被覆盖。所以如果把任务会话丢给 `never`，任务会在真正需要动手的那一刻失败。
+
+因此 `autoApprove`（页面上的「自动跳过所有授权」）是三层刻意设计的机制，且全部只作用于**由本插件驱动的会话**：
+
+| 层级 | 做了什么 |
+|---|---|
+| 任务会话的 `sandbox/mode = danger-full-access` | 文件系统和 shell 工具不再需要提权，从源头上就不产生询问。这一层决定"事情能不能做成" |
+| `tools/pre-execute` 监听器返回 `{ kind: 'allow' }` | 真正的绕过层：在工具流水线中提前放行，使 `ask` 来不及变成一次授权请求，与会话自身策略无关 |
+| `approval/request` 监听器返回 `'allowed-once'` | 兜底：覆盖那些不通过 pre-execute 决策、而是直接向授权服务发问的工具 |
+
+两个监听器都以 `prepend: true` 注册在最前面，排在 Web GUI 自己的应答者之前，这样被托管的会话不可能卡在一个没人会回答的询问上。两者都会先检查托管会话集合，所以你正在手动输入的会话（包括当前这个对话）权限不受影响。
+
+**风险与注意事项：**
+
+- 打开这个开关，就等于让 AI 在一段无人看管的时间里以**完全访问权限**自主执行文件系统与 shell 操作。请只对你信任的任务内容打开它。
+- 关闭开关会立即停止后续的放行；但已经写入任务会话日志的 `sandbox/mode` 事件是持久的，所以一个曾经无人值守运行过的会话会保持不受限。这是对会话实际运行方式的记录，但也正是"只在确实需要时才保持开启"的理由。
+- 这个开关是插件级设置（对所有工作区生效），但托管是按会话追踪的：关闭后，相关会话就不再被托管。
+
+### 一个任务是怎么跑起来的
+
+1. **认领**：任务被标记为 `running` 并**先落盘**，然后才投递 prompt。这样中途崩溃时任务会被重新排队，而不是丢失。
+2. **选择会话**：按 `targetMode`。默认 `shared`，即每个工作区一个共用会话；`fresh` 则是每个任务新建一个会话。新建的会话会挂到任务所属的工作区下，因此第二天你可以在侧边栏里读到结果。
+3. **放宽权限**：即上面那三层。
+4. **投递 prompt**：任务文本会被加上一段说明——本任务由任务队列在预约时段自动派发、当前没有人在场、请不要请求确认或授权、直接按最合理的方案执行、完成后用简短中文说明做了什么。
+5. **判定完成**：队列监听 `agent/status` 的 `running → idle` 状态迁移，并记录最后一条 AI 回复作为结果。超过「单任务超时」仍未结束的任务会被记为失败。
+
+## 常见问题 FAQ
+
+**Q：任务到点了却没跑？**
+
+按顺序检查这几点：
+
+1. **当前是否在时段内**：页面顶部的状态栏会显示"时段外"以及"将于 HH:mm 开始"，还会倒计时。
+2. **队列是否被禁用**：`enabled` 为 `false` 时显示"已暂停"，任何时间都不会执行。
+3. **时段列表是否为空**：显示"未设时段"，此时任务只排队，到「设置」里加一个时段即可。
+4. **该工作区是否已有任务在跑**：每个工作区同时只跑一个，且执行间隔未结束时也不会开始下一个。
+5. **自动执行是真的没跑，还是跑了但你没看到**：看任务卡片的状态和「归档」面板。
+
+想不管这些条件立刻跑，点卡片上的「▶ 执行」。
+
+**Q：为什么同一个任务跑了两遍？**
+
+队列文件与会话日志**不是事务性的**。如果宿主在"prompt 已投递"和"状态已写盘"之间崩溃，任务会保留为 `running` 记录，重启后会被自动重新排队（并标注"interrupted by a Host restart; re-queued"），于是可能被执行两次。因此任务指令建议写成**幂等**的，也就是重复执行也不会造成额外副作用。
+
+**Q：改了代码为什么没生效？**
+
+- 改的是 `host/` 或 `index.js` → 需要**重启 DSH**。
+- 改的是 `src/` → 需要 `node build.mjs`，然后**刷新页面**。
+- 改了 `cordis.patch.yml` → 运行中的 dsh 会监听并热加载；没反应就刷新页面。
+
+如果保存设置时某个控件回弹，并在下方提示「宿主未接受：xxx」，说明正在运行的宿主是旧构建、不认识这个字段。页面会列出被拒绝的字段名，而不是让你猜；重启 DSH 通常就能解决。
+
+**Q：「归档」和「删除」有什么区别？**
+
+归档是收起来，任务还在 `queue.json` 里，可以随时 `移回队列`，也可以 `清空归档` 一次性删除（需两次确认）。删除则是直接从文档里移除，不可恢复。失败和已取消的任务不会被"归档已完成"带走，需要你自己决定重试还是删除。
+
+**Q：一个工作区可以有多个时段吗？**
+
+可以，而且任意一个打开就会运行。例如同时配置隔夜时段和午间时段。
+
+**Q：任务能在工作区之间移动吗？**
+
+不能。任务属于创建它时所在的工作区。唯一的例外是旧版文档迁移产生的、不属于任何工作区的任务，页面会提示并允许你「归入当前工作区」。
+
+**Q：切换工作区会看到别的队列吗？**
+
+不会。队列按工作区隔离，页面只显示当前会话所属工作区的任务；宿主侧也会校验，跨工作区修改任务的请求会返回 404。
+
+## 开发与测试
+
+```sh
+node build.mjs      # 由 src/ 重新生成 client.js
+node --test test/   # 189 个测试，无需安装任何第三方依赖
+```
+
+也可以直接用 `npm test`（等价于 `node build.mjs && node --test test/`）。
+
+测试覆盖范围：时段计算（跨午夜、结束分钟的排他性、一个工作区多个时段）、持久化文档的修复与旧版迁移、所有队列操作及其工作区作用域、调度器按工作区的时段门控、权限绕过的会话作用域、派发生命周期、HTTP 路由的安全门与跨工作区隔离、真实 Cordis 上下文下的接线，以及用真实构建产物配合 stub React 渲染的浏览器半边。
+
+`test/wiring.test.mjs` 需要借用已安装 DSH profile 里的 `@deepseek-ai/cordis`；没有时会自动跳过。
+
+### 代码结构
 
 ```
-index.js              re-exports name/inject/Config/apply
+index.js              re-export name/inject/Config/apply
 host/
-  window.js           pure window arithmetic: isOpen, nextBoundary, zone reads
-  state.js            the durable v3 document, repair, and the older migrations
-  queue.js            queue verbs, all scoped by workspace, plus archiving
-  scheduler.js        the claim loop: one pass, workspace by workspace
-  dispatch.js         session resolution, prompt delivery, completion tracking
-  privilege.js        the three-layer unattended-execution bypass
-  http.js             the control routes the page calls
-  plugin.js           wiring, session→workspace resolution, lifecycle
-src/                  the browser half, concatenated into client.js in order
-test/                 window, store, queue, scheduler, privilege, dispatch,
-                      http, wiring, client
+  window.js           纯时段计算：isOpen、nextBoundary、时区读取
+  state.js            持久化的 v3 文档、修复，以及旧版本迁移
+  queue.js            队列操作，全部按工作区限定，含归档
+  scheduler.js        认领循环：一趟一趟地扫过各工作区
+  dispatch.js         会话选择、prompt 投递、完成判定
+  privilege.js        三层无人值守执行绕过
+  http.js             页面调用的控制路由
+  plugin.js           接线、会话→工作区解析、生命周期
+src/                  浏览器半边，按文件名顺序拼接进 client.js
+test/                 时窗、store、队列、调度器、权限、派发、http、接线、客户端
 ```
 
-### The document
+`client.js` 是构建产物，不要直接编辑；改 `src/` 里的源文件后重新构建。
+
+### 数据文件
+
+队列数据默认保存在 `<DSH_HOME>/task-queue/queue.json`，结构如下：
 
 ```jsonc
 {
   "version": 3,
-  // The plugin's settings: hours, zone, approval, target mode, timeout, compaction.
-  "settings": { "windows": [ … ], "timeZone": "Asia/Shanghai", … },
-  // Only the interval is a workspace's own.
+  "settings": { "windows": [ /* … */ ], "timeZone": "Asia/Shanghai" /* … */ },
   "workspaces": { "<workspaceId>": { "settings": { "cooldownMinutes": 30 } } },
   "tasks": [
     { "id": "…", "workspaceId": "<workspaceId>", "status": "queued", "archivedAt": 0 }
@@ -352,190 +290,18 @@ test/                 window, store, queue, scheduler, privilege, dispatch,
 }
 ```
 
-Tasks carry their workspace rather than being nested under it. Nesting reads more
-naturally but makes every repair path recursive; a flat list keeps normalization
-in one place, and filtering by workspace is a scan of a list that never exceeds a
-few hundred entries.
+`settings` 是插件级设置，`workspaces` 里每个工作区只存自己的执行间隔。旧版 v1/v2 文档会被**自动迁移而不是丢弃**；v1 的任务会落到"未归属工作区"的桶里，页面会提示并允许你归入当前工作区。
 
-`lastFinishedAt` sits beside the settings rather than inside them because it is
-observed state, not configuration: it is what the execution interval measures
-from, and only the dispatcher writes it.
+## 已知限制
 
-Older documents are **migrated, not discarded**. A v1 document kept one settings
-object and a flat task list: its settings are what this version wants anyway, so
-they become the shared settings, and its tasks are kept under an *unassigned*
-bucket where they still run. The page reports them and offers to adopt them into
-the workspace you are looking at — guessing which workspace they belonged to
-would have been worse than saying plainly that they belong to none.
+- **每个工作区同时只执行一个任务**，这是设计如此，不是可调设置。
+- **完成状态由 agent 状态推断**：判定依据是 `running → idle` 的迁移，而不是停止原因。以一个提问结束的回合也算"已完成"；执行失败的任务会记录 `agent/error` 报出的内容。
+- **时段精确到分钟**，不支持秒级精度；调度器每一趟都重新读时钟，而不是依赖一个长定时器。
+- **队列文件与会话日志不是事务性的**：崩溃可能让任务被重跑一次，任务指令建议写成幂等的。
+- **需要宿主在运行**：它是在一个活着的 DSH 进程里安排工作，不会唤醒休眠中的机器。
+- **页面需要一个属于工作区的会话**：它挂在对话视图列表里，所以 对话/轨迹 能用的时候它就能用；不属于任何工作区的会话没有队列，页面会直接说明这一点。
+- **任务不能跨工作区移动**，唯一例外是旧版文档遗留的未归属任务。
 
-A v2 document kept a **full copy of every setting against each workspace**. The
-shared fields have to be lifted into one place, and they may disagree across
-workspaces — so the migration takes the value the most workspaces already used,
-preferring the first workspace on a tie, which keeps the hours the queue was
-mostly running on rather than an arbitrary one. Every workspace keeps its own
-interval, because that is the field that stays per workspace.
+## 许可证
 
-### Why the halves talk over HTTP
-
-A third-party browser half **cannot** call its own host half through the
-generated Remote protocol: the client side of that protocol has no source-mode
-fallback, so it needs a build-time generated artifact this plugin does not have.
-A plain route on `ctx.webServer` is the supported alternative, and every
-mutating request is gated twice — loopback-only peer, and a JSON content type —
-so a visited web page cannot drive the queue and a non-loopback peer cannot
-reach it on the default `127.0.0.1` bind.
-
-### Where the page is mounted
-
-The page registers one entry in `conversation.view`, the session-scoped list the
-shell renders one-at-a-time. That list already holds `chat` (order 0) and
-`trajectory` (order 10); this plugin takes `task-queue` at order 20, so it sits
-third and **never shadows a built-in view**. Reusing a shipped id would have put
-the queue *in that cell*, replacing 对话 or 轨迹.
-
-The entry is session-scoped, so its `inject` receives the session id — which is
-what makes the id travel with every request, and what lets the Host do the
-workspace resolution the page is not trusted to do itself.
-
-### A setting that silently reverts
-
-If you save the settings and a control springs back, the running Host did not
-accept that field — most often because it is an older build that does not know the
-key yet. The form now diffs the reply against what it sent and names what was
-refused, instead of leaving you to guess:
-
-> 宿主未接受：compactBeforeTask
-
-That turned a bug report ("I click save and it does not save") into a diagnosis:
-the page was correct, the Host was a build behind, and a restart fixed it.
-
-It then immediately caught the same mistake in reverse — the Host had stopped
-having a concurrency setting and this side kept sending it, so every save
-complained about a field that no longer existed. Two answers came out of that:
-the stale key was removed, and `test/client.test.mjs` now checks the payload
-against the Host's own defaults, so the two halves cannot disagree without a test
-failing. The reporting was working; what was missing was a check on the pair.
-
-### Adopting a session, and the directory conflict
-
-`sessionController.create({ sessionId })` reads as an idempotent "adopt this
-session", and it is not one. With no workspace named, the controller derives the
-working directory from its own process default — the profile directory — and then
-refuses to adopt a session whose recorded directory differs:
-
-```
-session "session-…" belongs to "/Users/me/project", not "/Users/me/.dsh/profiles/desktop"
-```
-
-That is a directory conflict reported for a call that had no business creating
-anything, and the message points at the wrong thing entirely. This plugin
-therefore **never re-creates a session it already has an id for**: it returns the
-id and lets `resolveAgent` resume it under the session's own persisted directory,
-where there is nothing to conflict with. A session is created once, with the
-workspace named.
-
-The same trap is why a pinned session is checked against the task's workspace
-before it is used: a session belongs to a workspace, so running this queue's
-tasks in another one would break the single promise the queue makes. The refusal
-names both workspaces instead of reporting a directory.
-
-### Plugin services, and a trap worth knowing
-
-Cordis **throws** on a property read for a service a plugin did not declare:
-
-```
-cannot get property "workspaceRegistry" without inject
-```
-
-So `try { ctx.someService } catch {}` is not a safe optional read — it looks like
-a working fallback while silently disabling that path forever. This plugin
-declares what it needs (`sessionController`, `webServer`, `agents`, `sessions`)
-and picks up optional services (`approval`, `workspaceRegistry`) through
-`ctx.inject([...], scoped => …)`, which yields the service when it mounts,
-withdraws it when it unmounts, and treats absence as a normal state.
-
-`test/wiring.test.mjs` boots a real Cordis context and mounts the plugin into it
-for exactly this reason — it is the test that pins the contract.
-
-## The browser bundle
-
-`client.js` is generated by `build.mjs` from the numbered sources in `src/`. The
-bundle format is one self-contained script registering one lazy factory:
-
-```js
-window.__ModuleLoader__.load({ id, factory(require) { … } })
-```
-
-`require()` inside that factory resolves only against the platform seed table —
-never a relative path — so the sources are concatenated into a single factory
-body and share one function scope. The files are numbered because `function`
-declarations hoist but `const` initialisers run in filename order. `build.mjs`
-also fails the build if the bundle ever requires anything but `react`, and if a
-stylesheet template literal contains a stray backtick.
-
-Only `react` is taken from the seed table. The DSH client packages are
-deliberately not imported: a plain-JavaScript plugin has no type check against
-them, they change without notice, and a throwing component blanks the slot it was
-registered into. Styling is one owned `<style>` element, entirely in
-`--dsw-alias-*` theme tokens, so the page follows light and dark mode without a
-single literal colour.
-
-The page root is a flex column that fills `conversation.view`'s box, and the
-**body** is what scrolls: the shell sizes that container with `overflow: hidden`,
-so a scroller anywhere else would be clipped instead of scrolling.
-
-### Why a page, and not a floating panel
-
-The first version of this plugin floated a draggable panel over the shell. Its
-header dragged, which meant the header captured the pointer on `pointerdown` —
-and pointer capture retargets the subsequent `click`, so **every button inside
-that header was dead**, including the settings toggle. A control that is
-clickable in the markup and inert in the browser is the worst kind of bug.
-
-A full page has no gesture to own, so its controls simply work. A regression test
-asserts the page installs no pointer-capturing gesture at all.
-
-## Develop
-
-```sh
-node build.mjs      # regenerate client.js
-node --test test/   # 189 tests, no dependencies to install
-```
-
-The suite covers the window arithmetic (the midnight wrap, the exclusive end
-minute, and several windows in one workspace), the durable store's repair and
-migration paths, every queue verb and its workspace scoping, the scheduler's
-per-workspace time gating, the privilege bypass's scoping, the dispatch
-lifecycle, the HTTP routes' security gates and cross-workspace isolation, the
-real-Cordis wiring, and the browser half rendered from the real generated bundle
-against a stub React — including a regression test that typing into the composer
-leaves the queue on screen, and one that a composed task is posted and the form
-clears.
-
-`test/wiring.test.mjs` needs an installed DSH profile to borrow
-`@deepseek-ai/cordis` from and skips cleanly when there is none.
-
-## Limits
-
-- **One task at a time per workspace**, by design rather than by setting.
-- **Completion is inferred from agent status**, not from a stop reason. A turn
-  that ends with a question still counts as done; a task that ends in failure is
-  recorded with whatever `agent/error` reported.
-- **The window is minute-granular.** Sub-minute precision is not meaningful for a
-  "work on it overnight" window, and the scheduler re-reads the clock on every
-  pass rather than trusting a long timer.
-- **The queue file is not transactional with the session log.** A crash between
-  the prompt admission and the status write can leave a task recorded as running
-  and re-queued on restart, so a task can run twice. Task instructions should
-  therefore be idempotent where practical.
-- **The Host must be running.** This schedules work inside a live DSH process; it
-  does not wake a sleeping machine.
-- **The page needs a session open, and that session needs a workspace.** It lives
-  in the conversation view list, so it is reachable whenever 对话 and 轨迹 are. A
-  session attached to no workspace has no queue.
-- **A task cannot be moved between workspaces.** Adopting unassigned tasks is the
-  one exception, and it exists only for a queue written before this rule did.
-
-## License
-
-[MIT](LICENSE).
+[MIT](LICENSE)。
