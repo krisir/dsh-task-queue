@@ -96,7 +96,7 @@ export const TARGET_MODE = Object.freeze({
 export const UNASSIGNED = '';
 
 /** The document's current version. */
-export const DOCUMENT_VERSION = 3;
+export const DOCUMENT_VERSION = 4;
 
 /**
  * The fields that belong to the plugin rather than to a workspace.
@@ -107,9 +107,12 @@ export const DOCUMENT_VERSION = 3;
  * answers is the exception, not the rule — so they live in one place and a
  * workspace never has its own copy to drift out of sync.
  *
- * `runnerSessionId` is here rather than per workspace because a shared runner is
- * a property of the execution mode: if the mode is shared, the queue keeps one
- * session for the tasks it drives.
+ * `runnerSessionId` is deliberately **not** here. A runner session belongs to
+ * the workspace whose tasks it runs, so storing its id once for the whole queue
+ * made the first workspace to run claim the slot for every other one: the second
+ * workspace found a non-empty id, reused it, and its tasks were delivered into
+ * the first workspace's conversation. The id is per workspace for the same
+ * reason the session is — a session belongs to a workspace.
  */
 export const GLOBAL_SETTING_FIELDS = Object.freeze([
 	'enabled',
@@ -117,20 +120,26 @@ export const GLOBAL_SETTING_FIELDS = Object.freeze([
 	'timeZone',
 	'autoApprove',
 	'targetMode',
-	'runnerSessionId',
 	'taskTimeoutMinutes',
 	'compactBeforeTask',
 ]);
 
 /**
- * The one setting a workspace owns.
+ * The settings a workspace owns.
  *
  * The interval is the field that legitimately differs between two projects: one
  * repository may be rate-limited, another may be a scratch space worth working
- * through quickly. It is therefore the per-workspace setting, and the only one
- * stored against a workspace.
+ * through quickly.
+ *
+ * `runnerSessionId` is here because it names a *session*, and a session belongs
+ * to the workspace it was created in. Keeping it globally made it the one shared
+ * value that could not be shared: whichever workspace dispatched first wrote its
+ * own session id into the plugin-wide slot, and every other workspace then
+ * resolved to that session and delivered its tasks into a foreign conversation.
+ * Storing it per workspace is what makes "a task runs in the workspace that owns
+ * it" structural rather than a promise the dispatcher has to remember.
  */
-export const WORKSPACE_SETTING_FIELDS = Object.freeze(['cooldownMinutes']);
+export const WORKSPACE_SETTING_FIELDS = Object.freeze(['cooldownMinutes', 'runnerSessionId']);
 
 /** Default settings; every field is validated on read, so this is also the repair table. */
 export const DEFAULT_GLOBAL_SETTINGS = Object.freeze({
@@ -144,8 +153,6 @@ export const DEFAULT_GLOBAL_SETTINGS = Object.freeze({
 	autoApprove: true,
 	/** How a task's session is chosen. */
 	targetMode: TARGET_MODE.shared,
-	/** The shared runner session once one has been created. */
-	runnerSessionId: '',
 	/** Minutes a single task may run before the queue marks it failed. */
 	taskTimeoutMinutes: 360,
 	/**
@@ -164,10 +171,10 @@ export const DEFAULT_GLOBAL_SETTINGS = Object.freeze({
 });
 
 /**
- * The one setting a workspace owns, with its default.
+ * The settings a workspace owns, with their defaults.
  *
- * Kept as its own table so a workspace entry is self-describing: what is in it is
- * the interval and nothing else.
+ * Kept as its own table so a workspace entry is self-describing: the interval it
+ * paces its batch with, and the session its tasks share.
  */
 export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
 	/**
@@ -182,6 +189,15 @@ export const DEFAULT_WORKSPACE_SETTINGS = Object.freeze({
 	 * genuinely answer differently.
 	 */
 	cooldownMinutes: 0,
+	/**
+	 * The session this workspace's tasks share, once one has been created.
+	 *
+	 * Empty until the first task is dispatched in `shared` mode. It is stored per
+	 * workspace because the session it names belongs to one: reading it from a
+	 * plugin-wide slot is what once let one workspace's tasks be delivered into
+	 * another workspace's conversation.
+	 */
+	runnerSessionId: '',
 });
 
 /** Every setting in its repaired form, for callers that want one flattened view. */
@@ -250,7 +266,6 @@ export function sanitizeGlobalSettingsPatch(raw) {
 	if (typeof source.autoApprove === 'boolean') patch.autoApprove = source.autoApprove;
 	if (typeof source.compactBeforeTask === 'boolean') patch.compactBeforeTask = source.compactBeforeTask;
 	if (Object.values(TARGET_MODE).includes(source.targetMode)) patch.targetMode = source.targetMode;
-	if (typeof source.runnerSessionId === 'string') patch.runnerSessionId = source.runnerSessionId;
 	if (source.taskTimeoutMinutes !== undefined && source.taskTimeoutMinutes !== null && source.taskTimeoutMinutes !== '') {
 		if (Number.isFinite(Number(source.taskTimeoutMinutes))) {
 			patch.taskTimeoutMinutes = clampNumber(
@@ -287,6 +302,7 @@ export function sanitizeWorkspaceSettingsPatch(raw) {
 			);
 		}
 	}
+	if (typeof source.runnerSessionId === 'string') patch.runnerSessionId = source.runnerSessionId;
 	return patch;
 }
 
@@ -419,6 +435,17 @@ export function normalizeState(raw) {
  * keeps the hours it was mostly running on instead of an arbitrary one. Every
  * workspace keeps its own interval, which is the field that stays per workspace.
  *
+ * A **v3** document kept one global `runnerSessionId` for the whole queue, which
+ * is the bug this version fixes: the first workspace to dispatch wrote its
+ * session id into that shared slot and every other workspace then resolved to
+ * it, so their tasks were delivered into a foreign conversation. The id names
+ * one real session belonging to one real workspace, so it is handed to the
+ * workspace whose tasks were actually running in it — the workspace owning the
+ * most tasks that recorded that session — and every other workspace starts with
+ * no runner and creates its own on the next dispatch. Copying the id into every
+ * workspace would keep the bug; dropping it everywhere would throw away a live
+ * conversation, so it goes to the one workspace it demonstrably belongs to.
+ *
  * @param {unknown} raw - a parsed document of any version.
  * @returns {{ document: object, seed: object | undefined }} the document and the plugin settings to adopt.
  */
@@ -435,6 +462,27 @@ export function migrate(raw) {
 			task !== null && typeof task === 'object' ? { ...task, workspaceId: UNASSIGNED } : task,
 		);
 		const document = normalizeState({ settings: legacy, workspaces: {}, tasks });
+		return { document, seed: undefined };
+	}
+
+	if (source.version === 3) {
+		// v3: one global runner session. Give it to the workspace it belongs to.
+		const rawWorkspaces = source.workspaces;
+		const workspaces = {};
+		for (const [key, value] of Object.entries(rawWorkspaces)) {
+			const record = value !== null && typeof value === 'object' ? value : {};
+			workspaces[key] = { settings: normalizeWorkspaceSettings(record.settings) };
+			const finished = Number(record.lastFinishedAt);
+			if (Number.isFinite(finished) && finished > 0) workspaces[key].lastFinishedAt = finished;
+		}
+		const owner = runnerOwner(source);
+		if (owner !== undefined && workspaces[owner] !== undefined) {
+			workspaces[owner].settings = { ...workspaces[owner].settings, runnerSessionId: source.settings.runnerSessionId };
+		}
+		const tasks = (Array.isArray(source.tasks) ? source.tasks : []).filter(
+			(task) => task !== null && typeof task === 'object',
+		);
+		const document = normalizeState({ settings: source.settings, workspaces, tasks });
 		return { document, seed: undefined };
 	}
 
@@ -455,6 +503,44 @@ export function migrate(raw) {
 	);
 	const document = normalizeState({ settings: chosen, workspaces, tasks });
 	return { document, seed: undefined };
+}
+
+/**
+ * Which workspace a v3 document's global runner session actually belongs to.
+ *
+ * The id is only evidence of ownership when a task recorded the same session:
+ * that is a task that genuinely ran in it. The workspace with the most such
+ * tasks wins, because it is the one the session was demonstrably serving;
+ * preferring the earliest task on a tie keeps the choice deterministic.
+ *
+ * A runner that no task ever recorded — the queue created it and nothing ran
+ * yet — has no owner to infer, and is left behind rather than handed to a
+ * workspace at random. Nothing is lost: an unused runner is recreated on the
+ * next dispatch.
+ *
+ * @param {object} source - the parsed v3 document.
+ * @returns {string | undefined} the owning workspace id, when one can be told.
+ */
+function runnerOwner(source) {
+	const settings = source.settings;
+	if (settings === null || typeof settings !== 'object') return undefined;
+	const runner = settings.runnerSessionId;
+	if (typeof runner !== 'string' || runner.length === 0) return undefined;
+	const tasks = Array.isArray(source.tasks) ? source.tasks : [];
+	const owner = new Map();
+	for (const task of tasks) {
+		if (task === null || typeof task !== 'object') continue;
+		if (task.sessionId !== runner) continue;
+		const workspaceId = typeof task.workspaceId === 'string' ? task.workspaceId : UNASSIGNED;
+		const seen = owner.get(workspaceId);
+		if (seen === undefined) owner.set(workspaceId, { count: 1 });
+		else seen.count += 1;
+	}
+	let best;
+	for (const [workspaceId, candidate] of owner) {
+		if (best === undefined || candidate.count > best.count) best = { workspaceId, count: candidate.count };
+	}
+	return best?.workspaceId;
 }
 
 /**
@@ -637,6 +723,23 @@ export class TaskStore {
 	 */
 	globalSettings() {
 		return normalizeGlobalSettings(this.state.settings);
+	}
+
+	/**
+	 * Every workspace's shared runner session id, in no particular order.
+	 *
+	 * The privilege layer needs all of them: each workspace owns its own runner,
+	 * so re-managing or releasing based on a single id would act on one workspace's
+	 * session and silently skip every other one. Empty ids are included — callers
+	 * filter them — so the shape stays a plain list of what the document holds.
+	 *
+	 * @returns {string[]} the runner session ids the document records.
+	 */
+	runnerSessionIds() {
+		return Object.values(this.state.workspaces).map((entry) => {
+			const settings = entry?.settings;
+			return typeof settings?.runnerSessionId === 'string' ? settings.runnerSessionId : '';
+		});
 	}
 
 	/**

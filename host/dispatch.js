@@ -158,8 +158,13 @@ export class Dispatcher {
 		const settings = this.store.globalSettings();
 		if (!settings.autoApprove) return;
 		if (settings.targetMode === TARGET_MODE.fresh) return;
-		if (settings.runnerSessionId.length === 0) return;
-		this.privileges.manage(settings.runnerSessionId);
+		// Every workspace keeps its own runner, so every workspace's runner has to
+		// be re-managed. Reading one id for the whole queue would leave all but one
+		// workspace's shared session unmanaged — it would keep running tasks while
+		// asking for approvals nobody is awake to answer.
+		for (const runner of this.store.runnerSessionIds()) {
+			if (runner.length > 0) this.privileges.manage(runner);
+		}
 	}
 
 	/**
@@ -202,6 +207,12 @@ export class Dispatcher {
 		// so the second task of a shared runner would otherwise still see an empty
 		// id — the one written moments earlier while creating the runner — and mint
 		// a second session for the same workspace.
+		//
+		// It is read per workspace, and stored per workspace. When it lived in the
+		// plugin-wide settings, every workspace resolved this field to the same
+		// value, so the first workspace to dispatch claimed the runner slot and the
+		// next workspace's tasks were prompted into *that* conversation — a task
+		// running outside the workspace that owns it.
 		const runner = this.store.settingsFor(task.workspaceId).runnerSessionId;
 		if (settings.targetMode === TARGET_MODE.shared && runner.length > 0) return runner;
 
@@ -431,20 +442,23 @@ export class Dispatcher {
 	/**
 	 * Release a session's relaxed permissions once nothing else needs them.
 	 *
-	 * A shared runner belongs to its workspace, so it stays managed;
-	 * every other session — which is every session in `fresh` mode — is released
-	 * the moment its task ends.
+	 * A shared runner belongs to its workspace, so it stays managed; every other
+	 * session — which is every session in `fresh` mode — is released the moment
+	 * its task ends.
+	 *
+	 * The decision is made against the runner ids the document actually holds, not
+	 * against the mode. The mode is a plugin-wide setting any workspace's settings
+	 * page may change, while a runner belongs to one workspace: reading the mode
+	 * here let a workspace switching to `fresh` release *another* workspace's
+	 * runner — its session then ran the rest of the night with the relaxed
+	 * permissions withdrawn until the next dispatch happened to re-arm them. Asking
+	 * whether this session is still somebody's runner is the question that stays
+	 * correct whatever mode anyone is in.
 	 *
 	 * @param {string} sessionId - the session to reconsider.
 	 */
 	#releaseIfUnused(sessionId) {
-		// The shared runner is a plugin-wide setting, so there is one session to
-		// compare against rather than one per workspace. A fresh-session mode has no
-		// runner at all, so nothing is held back.
-		const settings = this.store.globalSettings();
-		const isSharedRunner =
-			settings.targetMode !== TARGET_MODE.fresh && settings.runnerSessionId === sessionId;
-		if (!isSharedRunner) this.privileges.release(sessionId);
+		if (!this.store.runnerSessionIds().includes(sessionId)) this.privileges.release(sessionId);
 	}
 
 	/** Fail every in-flight task and forget it, without touching the queue. */

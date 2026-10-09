@@ -517,7 +517,7 @@
 
         <article class="card">
           <h3><span class="card__icon" aria-hidden="true">🗂️</span> 按工作区隔离</h3>
-          <p>在工作区里建的任务属于该工作区、只在该工作区执行，别的工区看不到。每个项目的队列是独立的。</p>
+          <p>在工作区里建的任务属于该工作区、只在该工作区执行，别的工区看不到。连执行用的会话也是按工作区独立的——一个工作区的任务绝不会被送进另一个工作区的会话。</p>
         </article>
 
         <article class="card">
@@ -830,7 +830,7 @@ node build.mjs &amp;&amp; node --test test/</code></pre>
               <th scope="row"><code>targetMode</code></th>
               <td class="def">'shared'</td>
               <td>全局</td>
-              <td>任务会话的选择方式：<code>shared</code>（复用一个 runner 会话）或 <code>fresh</code>（每个任务新会话）。</td>
+              <td>任务会话的选择方式：<code>shared</code>（同一工作区内复用一个 runner 会话）或 <code>fresh</code>（每个任务新会话）。两种模式下会话都按工作区隔离。</td>
             </tr>
             <tr>
               <th scope="row"><code>taskTimeoutMinutes</code></th>

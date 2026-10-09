@@ -68,19 +68,30 @@ test('the shared settings are repaired field by field', () => {
 	assert.equal(settings.taskTimeoutMinutes, 1, 'clamped to the floor');
 });
 
-test('a workspace entry keeps only its interval', () => {
-	// The other fields are the plugin's. Feeding them to a workspace must not
-	// store them there, or the per-workspace copy this model removed would come
-	// straight back the next time a v2-shaped object was normalized.
+test('a workspace entry keeps its interval and its runner, and nothing else', () => {
+	// The plugin-wide fields are the plugin's. Feeding them to a workspace must
+	// not store them there, or the per-workspace copy this model removed would
+	// come straight back the next time a v2-shaped object was normalized.
+	//
+	// `runnerSessionId` is the deliberate exception: it names a session, and a
+	// session belongs to the workspace it was created in. It was plugin-wide
+	// once, which is exactly how one workspace's tasks ended up prompted into
+	// another workspace's conversation.
 	const settings = normalizeWorkspaceSettings({
 		cooldownMinutes: 45,
+		runnerSessionId: 'session-runner',
 		windows: [{ start: '09:00', end: '17:00' }],
 		timeZone: 'UTC',
 		targetMode: 'fresh',
 		enabled: false,
 	});
 	assert.equal(settings.cooldownMinutes, 45, 'the interval is kept');
-	assert.deepEqual(Object.keys(settings), ['cooldownMinutes'], 'and nothing else is stored');
+	assert.equal(settings.runnerSessionId, 'session-runner', 'the runner the workspace owns is kept');
+	assert.deepEqual(
+		Object.keys(settings),
+		['cooldownMinutes', 'runnerSessionId'],
+		'and nothing else is stored',
+	);
 });
 
 test('a settings object with no window list falls back to the default night window', () => {
@@ -319,8 +330,8 @@ test('a v2 document has its shared fields lifted and its intervals kept', () => 
 	assert.equal(document.workspaces['ws-c'].settings.cooldownMinutes, 0);
 	assert.deepEqual(
 		Object.keys(document.workspaces['ws-a'].settings),
-		['cooldownMinutes'],
-		'and a workspace entry no longer carries a settings copy',
+		['cooldownMinutes', 'runnerSessionId'],
+		'and a workspace entry carries only what a workspace owns',
 	);
 	assert.equal(document.workspaces['ws-a'].lastFinishedAt, 1234, 'the cooldown anchor is untouched');
 	assert.equal(document.tasks.length, 1, 'tasks survive');

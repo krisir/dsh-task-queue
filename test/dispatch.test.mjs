@@ -319,6 +319,132 @@ test('shared mode reuses one runner session across tasks', async () => {
 	assert.equal(ctx.created.length, 1, 'and the runner is created exactly once, never re-adopted');
 });
 
+test('shared mode gives each workspace its own runner, never another workspace', async () => {
+	// The regression this pins, reported from a real run: the queue fired at
+	// 12:00, and every workspace's tasks were prompted into one session — the
+	// first workspace's. `runnerSessionId` lived in the plugin-wide settings, and
+	// `settingsFor` merges those into every workspace's view, so the second
+	// workspace read back the id the first one had just written and reused it.
+	// A task then ran in a workspace that did not own it.
+	const { ctx, store, dispatcher, taskSettings } = build({ targetMode: 'shared' });
+	const WS_B = 'ws-2';
+	// The fixture seeds only `WS`, so give the second workspace a settings entry
+	// of its own, exactly as a real second workspace would have.
+	store.mutate((state) => {
+		state.workspaces[WS_B] = { settings: normalizeWorkspaceSettings({}) };
+	});
+
+	const taskA = queued(store, 'work for alpha', WS);
+	const taskB = queued(store, 'work for beta', WS_B);
+	await dispatcher.dispatch(taskA, taskSettings);
+	await dispatcher.dispatch(taskB, taskSettings);
+
+	const runnerA = store.settingsFor(WS).runnerSessionId;
+	const runnerB = store.settingsFor(WS_B).runnerSessionId;
+	assert.ok(runnerA.length > 0, 'the first workspace has a runner');
+	assert.ok(runnerB.length > 0, 'so does the second');
+	assert.notEqual(
+		runnerA,
+		runnerB,
+		'the two workspaces do not share one runner session',
+	);
+	assert.notEqual(
+		ctx.prompts[0].sessionId,
+		ctx.prompts[1].sessionId,
+		"the second workspace's task was not sent into the first workspace's session",
+	);
+
+	// The session a task was prompted into is the one its own workspace owns, and
+	// it was created against that workspace — which is what the real Host derives
+	// the working directory from.
+	assert.equal(ctx.prompts[0].sessionId, runnerA, 'alpha ran in alpha runner');
+	assert.equal(ctx.prompts[1].sessionId, runnerB, 'beta ran in beta runner');
+	const createdFor = new Map(ctx.created.map((call) => [call.sessionId, call.request.workspaceId]));
+	assert.equal(createdFor.get(runnerA), WS, "alpha's runner was created for alpha");
+	assert.equal(createdFor.get(runnerB), WS_B, "beta's runner was created for beta");
+});
+
+test('a runner belongs to one workspace even after the other runs first', async () => {
+	// Order must not decide ownership. Here the second workspace dispatches first;
+	// under the old global field it would have claimed the shared slot and the
+	// first workspace would then have been the one sent into a foreign session.
+	const { ctx, store, dispatcher, taskSettings } = build({ targetMode: 'shared' });
+	const WS_B = 'ws-2';
+	store.mutate((state) => {
+		state.workspaces[WS_B] = { settings: normalizeWorkspaceSettings({}) };
+	});
+
+	const taskB = queued(store, 'work for beta', WS_B);
+	const taskA = queued(store, 'work for alpha', WS);
+	await dispatcher.dispatch(taskB, taskSettings);
+	await dispatcher.dispatch(taskA, taskSettings);
+
+	assert.notEqual(store.settingsFor(WS).runnerSessionId, store.settingsFor(WS_B).runnerSessionId);
+	const createdFor = new Map(ctx.created.map((call) => [call.sessionId, call.request.workspaceId]));
+	// The first prompt belongs to ws-2 and the second to ws-1, and each must have
+	// gone to a session that was created for that same workspace.
+	assert.equal(createdFor.get(ctx.prompts[0].sessionId), WS_B, 'the beta task ran in a beta session');
+	assert.equal(createdFor.get(ctx.prompts[1].sessionId), WS, 'the alpha task ran in an alpha session');
+});
+
+test('one workspace switching to fresh does not disarm another workspace runner', async () => {
+	// `targetMode` is a plugin-wide setting any workspace's settings page may
+	// change, while a runner belongs to one workspace. Deciding whether to release
+	// a session by reading the *mode* therefore let a workspace that switched to
+	// `fresh` withdraw the relaxed permissions from a different workspace's runner:
+	// that workspace's tasks kept coming, but the unattended bypass was gone until
+	// something happened to re-arm it. The release decision has to ask whether the
+	// session is still somebody's runner, which is independent of any mode.
+	const { ctx, store, privileges, dispatcher, taskSettings } = build({ targetMode: 'shared' });
+	const WS_B = 'ws-2';
+	store.mutate((state) => {
+		state.workspaces[WS_B] = { settings: normalizeWorkspaceSettings({}) };
+	});
+
+	// Workspace A dispatches and keeps a runner of its own.
+	await dispatcher.dispatch(queued(store, 'alpha work', WS), taskSettings);
+	const runnerA = store.settingsFor(WS).runnerSessionId;
+	assert.ok(runnerA.length > 0, 'workspace A owns a runner');
+	assert.equal(privileges.isManaged(runnerA), true, 'and its runner is managed while it runs');
+
+	// Some other workspace switches the plugin-wide mode to fresh.
+	store.mutate((state) => {
+		state.settings = normalizeGlobalSettings({ ...state.settings, targetMode: 'fresh' });
+	});
+
+	// A's task now finishes. Its runner must stay managed: it is still A's runner,
+	// and A will dispatch into it again the moment its next task comes up.
+	const agent = ctx.agents.get(runnerA);
+	ctx.listeners.get('agent/status')({ agent, status: 'running' });
+	ctx.listeners.get('agent/status')({ agent, status: 'idle' });
+	assert.equal(
+		privileges.isManaged(runnerA),
+		true,
+		"a plugin-wide mode change did not disarm another workspace's runner",
+	);
+});
+
+test('a fresh-mode session is released once its task ends', async () => {
+	// The other half of the same rule: a session that is nobody's runner has no
+	// claim on the bypass, so it is released the moment its task is done.
+	const { ctx, store, privileges, dispatcher, taskSettings } = build({ targetMode: 'fresh' });
+	await dispatcher.dispatch(queued(store, 'one-off', WS), taskSettings);
+	const sessionId = ctx.prompts[0].sessionId;
+	assert.equal(privileges.isManaged(sessionId), true, 'it is managed while its task runs');
+
+	// Finish the turn: the session has served its one task and holds no workspace,
+	// so the grant has nothing left to cover.
+	const agent = ctx.agents.get(sessionId);
+	ctx.listeners.get('agent/status')({ agent, status: 'running' });
+	ctx.listeners.get('agent/status')({ agent, status: 'idle' });
+	assert.equal(
+		privileges.isManaged(sessionId),
+		false,
+		'a per-task session is released rather than held for a workspace',
+	);
+	assert.equal(store.settingsFor(WS).runnerSessionId, '', 'and fresh mode records no runner');
+});
+
 test('fresh mode gives every task its own session', async () => {
 	const { ctx, store, dispatcher, taskSettings } = build({ targetMode: 'fresh' });
 	const first = queued(store, 'one');

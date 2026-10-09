@@ -212,7 +212,7 @@ test('an empty window list is a real instruction, not a missing field', () => {
 	assert.deepEqual(state.settings.windows, [], 'schedule nothing');
 });
 
-test('the interval is per workspace while the rest is shared', () => {
+test('the interval and the runner are per workspace while the rest is shared', () => {
 	const state = emptyState();
 	// Two workspaces, each setting an interval, with one of them also asking for
 	// hours. The intervals must not touch each other; the hours must not be stored
@@ -224,8 +224,8 @@ test('the interval is per workspace while the rest is shared', () => {
 	assert.equal(state.workspaces['ws-2'].settings.cooldownMinutes, 5);
 	assert.deepEqual(
 		Object.keys(state.workspaces['ws-1'].settings),
-		['cooldownMinutes'],
-		'a workspace stores its interval and nothing else',
+		['cooldownMinutes', 'runnerSessionId'],
+		'a workspace stores only what it owns',
 	);
 
 	// The hours went to the one global object, so every workspace agrees on them.
@@ -234,6 +234,30 @@ test('the interval is per workspace while the rest is shared', () => {
 	patchSettings(state, 'ws-2', { cooldownMinutes: 6 }, {});
 	assert.deepEqual(state.settings.windows, [{ start: '18:00', end: '07:00' }], 'still the same hours');
 	assert.equal(state.workspaces['ws-2'].settings.cooldownMinutes, 6, 'and the interval moved');
+});
+
+test('two workspaces never share a runner session', () => {
+	// The regression this pins: `runnerSessionId` lived in the plugin-wide
+	// settings, so `settingsFor` returned the same id for every workspace. The
+	// first workspace to dispatch wrote its session there, every other workspace
+	// read it back, and their tasks were prompted into a conversation belonging to
+	// a workspace that did not own them.
+	const state = emptyState();
+	patchSettings(state, 'ws-1', { runnerSessionId: 'session-one' }, {});
+	assert.equal(state.workspaces['ws-1'].settings.runnerSessionId, 'session-one');
+	assert.equal(
+		state.workspaces['ws-2']?.settings?.runnerSessionId ?? '',
+		'',
+		'ws-2 was never given ws-1 session',
+	);
+
+	// And the id does not leak into the plugin-wide settings, where every
+	// workspace would read it back through `settingsFor`.
+	assert.equal(state.settings.runnerSessionId, undefined, 'the runner is not a global setting');
+
+	patchSettings(state, 'ws-2', { runnerSessionId: 'session-two' }, {});
+	assert.equal(state.workspaces['ws-1'].settings.runnerSessionId, 'session-one', 'ws-1 keeps its own');
+	assert.equal(state.workspaces['ws-2'].settings.runnerSessionId, 'session-two', 'ws-2 keeps its own');
 });
 
 test('unassigned tasks can be adopted into a workspace', () => {

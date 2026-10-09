@@ -304,7 +304,11 @@ export function patchSettings(state, workspaceId, patch, seed) {
 		state.settings = normalizeGlobalSettings({ ...base, ...global });
 	}
 
-	// The interval belongs to the workspace that asked for it.
+	// The workspace's own fields belong to the workspace that asked for them: its
+	// execution interval, and the runner session its tasks share. The runner id is
+	// per workspace for the same reason the session is — a session belongs to the
+	// workspace it was created in, so writing it once for the whole queue is what
+	// let one workspace's tasks be delivered into another's conversation.
 	const own = sanitizeWorkspaceSettingsPatch(patch);
 	const existing = state.workspaces[workspaceId]?.settings;
 	const base = existing ?? normalizeWorkspaceSettings({});
